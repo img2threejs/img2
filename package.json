@@ -1,0 +1,25 @@
+{
+  "name": "img2",
+  "version": "0.1.0",
+  "description": "Plugin harness for the img2 ecosystem: everything is a plugin.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "img2": "bin/img2.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "img2_core",
+    "docs"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs && python3 -m unittest discover -s tests/python -p 'test_*.py'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/img2threejs/img2.git"
+  }
+}
