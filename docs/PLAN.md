@@ -125,6 +125,27 @@ installer path in img2threejs/img2threejs with a pointer.
 9. `doctor` fails a plugin containing `parents[N]` or a cross-plugin import (static only).
 10. `img2 remove` → no dangling host symlink on ANY host, no orphan row.
 
+## Phase 2–3 results (2026-08-22)
+
+Thin slice built and tagged `v0.1.0` on all three repos (harness `1013a62`, hello-cube
+`da8babc`, img2glb `353a8ea`). Unit suites: harness 20/20 node + 32 python; hello-cube 6;
+img2glb 12 — all green, independently re-run.
+
+Acceptance: tests 1–3, 5–10 **pass** as written (test 2's zero-core-edit check: both
+harness checkouts `git status --porcelain` empty after `add`). Test 4 passed its
+structural half (symlink → `$IMG2_HOME`, valid frontmatter, settings merge); the
+live-model half is the remaining **manual step: open a real host session in an empty dir
+and ask for an image→GLB conversion**. Substitution: private-repo clones used `file://`
+local paths under the sandbox fake-HOME (https creds unavailable there); the
+newest-tag-resolution path is now exercisable for real since `v0.1.0` exists.
+
+Findings fixed before tagging: (1) `_img2_local.py` fallback only resolved next to the
+running script — sync now writes it into the clone root AND `tools/` (contract §8
+amended, regression-tested with an env-empty subprocess); (2) lost-update window in
+state read-modify-write — `update_plugin_state()` added holding the lock across the whole
+cycle (contract §11 amended; the old pattern measurably lost 20/40 writes under the new
+concurrency test).
+
 ## Risks
 
 | Risk | Mitigation |
