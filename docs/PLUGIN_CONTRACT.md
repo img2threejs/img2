@@ -134,8 +134,10 @@ layered config.
   host's settings (`~/.claude/settings.json`), idempotently, preserving unknown keys.
   Without this every plugin read is a permission prompt.
 - Python interop: `img2 add` and `img2 sync` write `_img2_local.py` (a one-line module:
-  `CORE = "<abs path to $IMG2_HOME/harness/img2_core parent>"`) into each plugin clone.
-  It is gitignored by contract (§4). Every plugin tool starts with the fixed stanza:
+  `CORE = "<abs path to $IMG2_HOME/harness/img2_core parent>"`) into each plugin clone's
+  root AND into its `tools/` directory — `python3 tools/x.py` puts `tools/`, not the clone
+  root, at `sys.path[0]`, so the fallback import only resolves next to the script. It is
+  gitignored by contract (§4; the bare-filename pattern covers both copies). Every plugin tool starts with the fixed stanza:
 
   ```python
   import os, sys
@@ -189,7 +191,10 @@ never a guessed order).
 - Envelope at `<workspace>/.img2/state.json`:
   `{ "version": 1, "workspace": "<abs>", "plugins": { "<id>": { … } } }`.
 - `img2_core.state` owns load/save/locking/versioning; a plugin reads and writes ONLY its
-  own subtree, via core helpers. Tools take `--workspace` (default: cwd) — NEVER the
+  own subtree, via core helpers. Mutations MUST go through
+  `img2_core.state.update_plugin_state(workspace, plugin_id, fn)`, which holds the lock
+  across the whole read-modify-write — a separate load→mutate→save with the lock held only
+  at save is a lost-update bug. Tools take `--workspace` (default: cwd) — NEVER the
   skill/checkout root.
 - Cross-plugin handoff is files in `<workspace>/.img2/artifacts/` with declared
   `"kind"` identifiers, not shared mutable state.

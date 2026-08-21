@@ -6,6 +6,8 @@ from pathlib import Path
 
 STATE_VERSION = 1
 LOCK_STALE_SECONDS = 60 * 60
+UPDATE_LOCK_TIMEOUT_SECONDS = 30
+UPDATE_LOCK_RETRY_SECONDS = 0.02
 
 
 class LockHeldError(RuntimeError):
@@ -77,7 +79,7 @@ def load_state(workspace):
     return data
 
 
-def save_state(workspace, state):
+def _write_state(workspace, state):
     if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
         raise RuntimeError(
             "refusing to save a state envelope whose version is not %d" % STATE_VERSION
@@ -86,12 +88,38 @@ def save_state(workspace, state):
         raise RuntimeError("refusing to save a state envelope without a 'plugins' object")
     state["workspace"] = str(Path(workspace).resolve())
     path = _state_path(workspace)
-    with workspace_lock(workspace):
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
     return state
+
+
+def save_state(workspace, state):
+    with workspace_lock(workspace):
+        return _write_state(workspace, state)
 
 
 def plugin_state(state, plugin_id):
     return state.setdefault("plugins", {}).setdefault(plugin_id, {})
+
+
+def update_plugin_state(workspace, plugin_id, fn, timeout=UPDATE_LOCK_TIMEOUT_SECONDS):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with workspace_lock(workspace):
+                state = load_state(workspace)
+                subtree = plugin_state(state, plugin_id)
+                replacement = fn(subtree)
+                if replacement is not None:
+                    if not isinstance(replacement, dict):
+                        raise RuntimeError(
+                            "update_plugin_state fn must mutate the subtree or return a dict, got %r"
+                            % type(replacement).__name__
+                        )
+                    state["plugins"][plugin_id] = replacement
+                return _write_state(workspace, state)
+        except LockHeldError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(UPDATE_LOCK_RETRY_SECONDS)

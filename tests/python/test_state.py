@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -12,6 +14,7 @@ from img2_core.state import (
     load_state,
     plugin_state,
     save_state,
+    update_plugin_state,
     workspace_lock,
 )
 
@@ -91,6 +94,77 @@ class LockTest(unittest.TestCase):
             with workspace_lock(self.workspace):
                 raise RuntimeError("boom")
         self.assertFalse(self.lock.exists())
+
+
+INCREMENT_WORKER = """\
+import sys
+sys.path.insert(0, sys.argv[2])
+from img2_core.state import update_plugin_state
+
+def bump(subtree):
+    subtree["n"] = subtree.get("n", 0) + 1
+
+for _ in range(20):
+    update_plugin_state(sys.argv[1], "counter", bump)
+"""
+
+
+class UpdatePluginStateTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self._tmp.name).resolve()
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_mutation_in_place_is_saved(self):
+        update_plugin_state(self.workspace, "p", lambda sub: sub.update({"x": 1}))
+        self.assertEqual(load_state(self.workspace)["plugins"]["p"], {"x": 1})
+        self.assertFalse((self.workspace / ".img2" / ".lock").exists())
+
+    def test_returned_dict_replaces_subtree(self):
+        update_plugin_state(self.workspace, "p", lambda sub: sub.update({"x": 1, "y": 2}))
+        update_plugin_state(self.workspace, "p", lambda sub: {"x": sub["x"] + 1})
+        self.assertEqual(load_state(self.workspace)["plugins"]["p"], {"x": 2})
+
+    def test_non_dict_return_is_refused(self):
+        with self.assertRaises(RuntimeError):
+            update_plugin_state(self.workspace, "p", lambda sub: 7)
+        self.assertFalse((self.workspace / ".img2" / ".lock").exists())
+
+    def test_only_named_subtree_changes(self):
+        update_plugin_state(self.workspace, "other", lambda sub: sub.update({"keep": True}))
+        update_plugin_state(self.workspace, "p", lambda sub: sub.update({"x": 1}))
+        self.assertEqual(load_state(self.workspace)["plugins"]["other"], {"keep": True})
+
+    def test_lock_released_when_fn_raises(self):
+        with self.assertRaises(ValueError):
+            update_plugin_state(self.workspace, "p", lambda sub: (_ for _ in ()).throw(ValueError("boom")))
+        self.assertFalse((self.workspace / ".img2" / ".lock").exists())
+
+    def test_fresh_foreign_lock_raises_after_timeout(self):
+        lock = self.workspace / ".img2" / ".lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps({"pid": 1}))
+        with self.assertRaises(LockHeldError):
+            update_plugin_state(self.workspace, "p", lambda sub: sub.update({"x": 1}), timeout=0.1)
+
+    def test_concurrent_increments_are_not_lost(self):
+        # update_plugin_state holds the workspace lock across the whole
+        # read-modify-write and, on contention, retries acquisition until a
+        # deadline (blocking acquire) rather than failing on the first
+        # LockHeldError -- so two writers serialize and no increment is lost.
+        core_root = str(Path(__file__).resolve().parents[2])
+        procs = [
+            subprocess.Popen(
+                [sys.executable, "-c", INCREMENT_WORKER, str(self.workspace), core_root],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(2)
+        ]
+        for proc in procs:
+            _, stderr = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, stderr.decode())
+        self.assertEqual(load_state(self.workspace)["plugins"]["counter"]["n"], 40)
 
 
 if __name__ == "__main__":

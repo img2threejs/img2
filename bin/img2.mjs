@@ -520,6 +520,15 @@ function computeGenerated(H, reg) {
   }
 }
 
+// python3 tools/x.py puts tools/, not the clone root, at sys.path[0], so the fallback module must
+// also sit next to the scripts (contract section 8).
+function localFiles(dir) {
+  const files = [path.join(dir, '_img2_local.py')]
+  const tools = path.join(dir, 'tools')
+  if (fs.existsSync(tools)) files.push(path.join(tools, '_img2_local.py'))
+  return files
+}
+
 function syncTargets(H, reg) {
   const expected = computeGenerated(H, reg)
   const targets = [
@@ -527,7 +536,7 @@ function syncTargets(H, reg) {
     { file: path.join(generatedDir(H), 'routes.json'), want: expected.routes },
   ]
   for (const row of reg.plugins) {
-    targets.push({ file: path.join(cloneDir(H, row.id), '_img2_local.py'), want: expected.local })
+    for (const file of localFiles(cloneDir(H, row.id))) targets.push({ file, want: expected.local })
   }
   return targets
 }
@@ -931,9 +940,11 @@ async function cmdDoctor(opts) {
       } catch { /* not ignored, or not a git work tree */ }
       if (!ignored) err(row.id, '.gitignore does not cover _img2_local.py (contract section 4)')
 
-      const localFile = path.join(dir, '_img2_local.py')
-      if (!fs.existsSync(localFile)) err(row.id, '_img2_local.py is missing; run `img2 sync`')
-      else if (fs.readFileSync(localFile, 'utf8') !== localStanza(H)) err(row.id, '_img2_local.py is stale; run `img2 sync`')
+      for (const localFile of localFiles(dir)) {
+        const rel = path.relative(dir, localFile)
+        if (!fs.existsSync(localFile)) err(row.id, rel + ' is missing; run `img2 sync`')
+        else if (fs.readFileSync(localFile, 'utf8') !== localStanza(H)) err(row.id, rel + ' is stale; run `img2 sync`')
+      }
 
       for (const finding of staticToolFindings(dir, row.id, allIds)) err(row.id, finding)
 
