@@ -31,11 +31,16 @@ function makeHarnessRepo(root) {
   const dir = path.join(root, 'fixture-harness')
   initRepo(dir)
   fs.writeFileSync(path.join(dir, 'README.md'), 'fixture harness\n')
+  // The working-tree img2_core, so a cloned fixture harness can serve the tools' fallback import.
+  fs.cpSync(fileURLToPath(new URL('../img2_core', import.meta.url)), path.join(dir, 'img2_core'), {
+    recursive: true,
+    filter: (src) => !src.includes('__pycache__'),
+  })
   commitAll(dir, 'init')
   return dir
 }
 
-function makePluginRepo(root, name, { manifest = {}, tag = 'v0.1.0' } = {}) {
+function makePluginRepo(root, name, { manifest = {}, tag = 'v0.1.0', tool = 'print("ok")\n' } = {}) {
   const dir = path.join(root, 'fixture-' + name)
   initRepo(dir)
   const doc = {
@@ -51,7 +56,7 @@ function makePluginRepo(root, name, { manifest = {}, tag = 'v0.1.0' } = {}) {
   fs.writeFileSync(path.join(dir, 'SKILL.md'), '# ' + name + '\n')
   fs.writeFileSync(path.join(dir, '.gitignore'), '_img2_local.py\n')
   fs.mkdirSync(path.join(dir, 'tools'), { recursive: true })
-  fs.writeFileSync(path.join(dir, 'tools', 'noop.py'), 'print("ok")\n')
+  fs.writeFileSync(path.join(dir, 'tools', 'noop.py'), tool)
   commitAll(dir, 'init')
   if (tag) gitq(['tag', tag], dir)
   return dir
@@ -158,8 +163,10 @@ test('add / list / sync / doctor / remove lifecycle', (t) => {
   assert.ok(fs.lstatSync(link).isSymbolicLink())
   assert.equal(fs.realpathSync(link), fs.realpathSync(path.join(sb.H, 'plugins', 'hello-cube')))
 
-  const local = fs.readFileSync(path.join(sb.H, 'plugins', 'hello-cube', '_img2_local.py'), 'utf8')
-  assert.equal(local, 'CORE = ' + JSON.stringify(path.join(sb.H, 'harness')) + '\n')
+  const stanza = 'CORE = ' + JSON.stringify(path.join(sb.H, 'harness')) + '\n'
+  assert.equal(fs.readFileSync(path.join(sb.H, 'plugins', 'hello-cube', '_img2_local.py'), 'utf8'), stanza)
+  const toolsLocal = path.join(sb.H, 'plugins', 'hello-cube', 'tools', '_img2_local.py')
+  assert.equal(fs.readFileSync(toolsLocal, 'utf8'), stanza)
 
   const index = fs.readFileSync(path.join(sb.H, 'generated', 'index.md'), 'utf8')
   assert.match(index, /hello-cube/)
@@ -200,6 +207,23 @@ test('add / list / sync / doctor / remove lifecycle', (t) => {
 
   r = run(['doctor'], sb.env, sb.root)
   assert.equal(r.status, 0, 'doctor must pass on a clean install: ' + r.stdout + r.stderr)
+
+  fs.rmSync(toolsLocal)
+  r = run(['sync', '--check'], sb.env, sb.root)
+  assert.equal(r.status, 1, 'a missing tools/_img2_local.py must be drift: ' + r.stdout)
+  assert.match(r.stdout, /tools[\\/]_img2_local\.py/)
+  r = run(['doctor'], sb.env, sb.root)
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /tools[\\/]_img2_local\.py is missing/)
+  fs.writeFileSync(toolsLocal, 'CORE = "/stale"\n')
+  r = run(['doctor'], sb.env, sb.root)
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /tools[\\/]_img2_local\.py is stale/)
+  r = run(['sync'], sb.env, sb.root)
+  assert.equal(r.status, 0)
+  assert.equal(fs.readFileSync(toolsLocal, 'utf8'), stanza)
+  r = run(['doctor'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stdout + r.stderr)
 
   const badTool = path.join(sb.H, 'plugins', 'hello-cube', 'tools', 'bad.py')
   fs.writeFileSync(badTool, 'from pathlib import Path\nfrom forge.state import x\nROOT = Path(__file__).parents[3]\n')
@@ -293,6 +317,30 @@ test('add refuses when a foreign path occupies the skill link name', (t) => {
   assert.equal(r.status, 2, r.stderr + r.stdout)
   assert.match(r.stderr, /foreign/)
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins, [])
+})
+
+test('a tools/ script resolves img2_core via _img2_local.py with no IMG2_HOME set', (t) => {
+  const sb = installed(t)
+  const stanza = [
+    'import os, sys',
+    'root = os.environ.get("IMG2_HOME")',
+    'if root: sys.path.insert(0, os.path.join(root, "harness"))',
+    'else:',
+    '    try: import _img2_local; sys.path.insert(0, _img2_local.CORE)',
+    '    except ImportError: sys.exit("img2: core not linked - run `img2 sync`")',
+    'from img2_core import require_core_api',
+    'require_core_api(1)',
+    'print("fallback ok")',
+  ].join('\n') + '\n'
+  const plugin = makePluginRepo(sb.root, 'fallback-check', { tool: stanza })
+
+  const r = run(['add', 'file://' + plugin, '--allow-any-source'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const script = path.join(sb.H, 'plugins', 'fallback-check', 'tools', 'noop.py')
+
+  const py = spawnSync('python3', [script], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: sb.HOME }, cwd: sb.root })
+  assert.equal(py.status, 0, py.stderr + py.stdout)
+  assert.match(py.stdout, /fallback ok/)
 })
 
 test('the harness checkout stays git-clean through add and sync', (t) => {
