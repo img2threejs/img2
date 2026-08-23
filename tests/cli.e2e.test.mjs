@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const BIN = fileURLToPath(new URL('../bin/img2.mjs', import.meta.url))
+const { harnessVersion } = await import('../bin/img2.mjs')
 
 function gitq(args, cwd) {
   execFileSync('git', args, { cwd, stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
@@ -252,7 +253,7 @@ test('add blocks version and schema mismatches naming both sides', (t) => {
   let r = run(['add', 'file://' + old, '--allow-any-source'], sb.env, sb.root)
   assert.equal(r.status, 1, r.stderr + r.stdout)
   assert.match(r.stderr, />=99\.0\.0/)
-  assert.match(r.stderr, /0\.1\.0/)
+  assert.ok(r.stderr.includes(harnessVersion()), r.stderr)
 
   const wrongCore = makePluginRepo(sb.root, 'wrong-core', { manifest: { requires: { harness: '>=0.1.0', coreApi: 2 } } })
   r = run(['add', 'file://' + wrongCore, '--allow-any-source'], sb.env, sb.root)

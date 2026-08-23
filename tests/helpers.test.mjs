@@ -13,6 +13,7 @@ import {
   resolveSource,
   topoSort,
   validateManifest,
+  harnessVersion,
 } from '../bin/img2.mjs'
 
 const throwsCli = (fn, code, match) => {
@@ -135,7 +136,7 @@ test('validateManifest blocks version mismatches naming both versions', () => {
     EXIT.FAIL,
     />=99\.0\.0/,
   )
-  assert.match(harness.message, /0\.1\.0/)
+  assert.ok(harness.message.includes(harnessVersion()))
 
   const core = throwsCli(
     () => validateManifest({ ...goodManifest(), requires: { harness: '>=0.1.0', coreApi: 2 } }),
