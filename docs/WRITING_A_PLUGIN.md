@@ -56,9 +56,19 @@ GLB 3D mesh… use when the user asks to turn an image into a GLB/3D mesh").
 name: img2-glb2threejs
 description: Converts a GLB mesh into procedural Three.js code. Use when the user has a .glb file and wants editable Three.js geometry.
 ---
-Body: exact commands the model should run, always from the USER'S project directory
-with `--workspace .` — never from the skill/checkout directory.
+Body: exact commands the model should run.
 ```
+
+Commands in the body MUST use the `$SKILL_DIR` convention — an absolute tool path plus
+the user's project as the workspace:
+
+```bash
+python3 "$SKILL_DIR/tools/my_tool.py" --image <path/to/image> --workspace "$PWD"
+```
+
+State in the body that `$SKILL_DIR` is the directory containing that SKILL.md. A bare
+relative path (`python3 tools/my_tool.py`) fails: the model runs commands from the user's
+project, where `tools/` does not exist. `plugin-hello-cube/SKILL.md` is the reference.
 
 ## 4. Tools
 
