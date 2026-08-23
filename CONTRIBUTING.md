@@ -20,11 +20,17 @@ Two kinds of contribution, two paths:
 ## Tests
 
 ```bash
-node --test tests/*.test.mjs                                  # CLI
-python3 -m unittest discover -s tests/python -p 'test_*.py'   # img2_core
+npm test                                                      # both suites
+node --test tests/*.test.mjs                                  # CLI only
+python3 -m unittest discover -s tests/python -p 'test_*.py'   # img2_core only
 ```
 
-Both suites must be green before any push. Behavior changes need a test that fails
+Use the glob, not `node --test tests/`: the directory form walks into `tests/python/` and fails on the
+Python files, reporting red on a green tree.
+
+Both suites must be green before any push. Re-run them after bumping `package.json` — the version is
+asserted through the exported `harnessVersion()`, and a bump with a stale expectation shipped red
+once already (v0.1.1). Behavior changes need a test that fails
 without the change — the lost-update fix (`tests/python/test_state.py`) is the model:
 it demonstrably catches the bug it guards against.
 
