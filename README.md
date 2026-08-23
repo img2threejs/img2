@@ -5,7 +5,11 @@ capability — it owns install/link plumbing, the plugin registry, the workspace
 the gate runner, and the contract.
 
 - Contract (normative): [docs/PLUGIN_CONTRACT.md](docs/PLUGIN_CONTRACT.md)
+- Writing a plugin: [docs/WRITING_A_PLUGIN.md](docs/WRITING_A_PLUGIN.md) — start by copying
+  [plugin-hello-cube](https://github.com/img2threejs/plugin-hello-cube), the reference plugin
+- Contributing to the harness: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Plan: [docs/PLAN.md](docs/PLAN.md)
+- Ecosystem discovery: GitHub topic `img2threejs-plugin`
 
 ## Quickstart
 
