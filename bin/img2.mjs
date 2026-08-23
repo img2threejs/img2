@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url'
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
 export const CORE_API = 1
+// Asserted against the highest "## N." heading in docs/PLUGIN_CONTRACT.md by a test, so this
+// cannot silently drift from the document it advertises.
+export const CONTRACT_REVISION = 14
 export const DEFAULT_ORG = 'img2threejs'
 const MIN_NODE = 18
 const LOCK_STALE_MS = 60 * 60 * 1000
@@ -18,6 +21,9 @@ const HARNESS_REPO_URL = 'https://github.com/img2threejs/img2'
 const LINK_PREFIX = 'img2-'
 const LEGACY_LINK_NAME = 'img2threejs'
 const NAME_RE = /^[a-z][a-z0-9-]*$/
+// The fields `cmdAdd` itself writes on a registry row; anything else on an existing row is
+// someone else's data and MUST survive a `--force` replace (contract section 6, rule 4).
+const ROW_KEYS = ['id', 'repo', 'ref', 'resolvedSha', 'addedAt']
 
 export class CliError extends Error {
   constructor(code, message, detail) {
@@ -188,6 +194,9 @@ export function validateManifest(manifest, where) {
     if (!cap || typeof cap !== 'object' || typeof cap.from !== 'string' || !cap.from || typeof cap.to !== 'string' || !cap.to) {
       fail('every capability needs non-empty string "from" and "to"')
     }
+  }
+  if ('overrides' in manifest) {
+    fail('"overrides" is reserved for user-authored pipeline overrides in plugins.json; a plugin manifest MUST NOT declare it (contract section 6)')
   }
   const req = manifest.requires
   if (!req || typeof req !== 'object' || Array.isArray(req)) fail('"requires" must be an object with "harness" and "coreApi"')
@@ -566,12 +575,18 @@ function localFiles(dir) {
   return files
 }
 
-function syncTargets(H, reg) {
-  const expected = computeGenerated(H, reg)
-  const targets = [
+// Scoped to the two files img2 capabilities (§13) is allowed to refuse on -- a stale per-clone
+// _img2_local.py must never deny an unrelated query.
+function generatedIndexTargets(H, expected) {
+  return [
     { file: path.join(generatedDir(H), 'index.md'), want: expected.index },
     { file: path.join(generatedDir(H), 'routes.json'), want: expected.routes },
   ]
+}
+
+function syncTargets(H, reg) {
+  const expected = computeGenerated(H, reg)
+  const targets = generatedIndexTargets(H, expected)
   for (const row of reg.plugins) {
     for (const file of localFiles(cloneDir(H, row.id))) targets.push({ file, want: expected.local })
   }
@@ -648,16 +663,84 @@ export function staticToolFindings(pluginDir, id, allIds) {
   return out
 }
 
-function commandFinding(command, pluginDir) {
+const ALLOWED_PLACEHOLDERS = new Set(['{plugin_dir}', '{workspace}', '{image}'])
+const SHELL_METACHAR_RE = /[;|&$`><()\n]/
+
+export function commandFinding(command, pluginDir) {
   if (typeof command !== 'string' || !command.trim()) return 'empty "command"'
+
+  const bracePattern = /\{[^{}]*\}/g
+  let brace
+  while ((brace = bracePattern.exec(command))) {
+    if (!ALLOWED_PLACEHOLDERS.has(brace[0])) {
+      return 'command uses unrecognised placeholder ' + brace[0] + '; only {plugin_dir}, {workspace} and {image} are permitted'
+    }
+  }
+
+  const angle = /<[^<>\n]*>/.exec(command)
+  if (angle) {
+    return 'command uses angle-bracket pseudo-placeholder ' + angle[0] + '; a shell would read this as redirection, not a placeholder'
+  }
+
+  const stripped = command.replaceAll('{plugin_dir}', '').replaceAll('{workspace}', '').replaceAll('{image}', '')
+  const metachars = stripped.match(new RegExp(SHELL_METACHAR_RE, 'g'))
+  if (metachars) {
+    return 'command contains shell metacharacter(s) ' + [...new Set(metachars)].join(' ') + '; commands run without a shell and must not need one'
+  }
+
   for (const token of command.split(/\s+/).filter(Boolean)) {
-    if (token.includes('{workspace}')) continue
+    if (token.includes('{workspace}') || token.includes('{image}')) continue
     const sub = token.replaceAll('{plugin_dir}', pluginDir)
     if (!/\.(py|mjs|js|sh)$/.test(sub)) continue
     const p = path.isAbsolute(sub) ? sub : path.join(pluginDir, sub)
     if (!fs.existsSync(p)) return 'command references a missing file: ' + token
   }
   return null
+}
+
+// ---------------------------------------------------------------- argv tokenisation
+
+// shlex-equivalent splitting -- the same algorithm img2_core/gate_runner.py:90-93 already runs
+// before substituting values, so there is one tokenisation algorithm for the project, not two.
+export function shlexSplit(command) {
+  const tokens = []
+  let current = ''
+  let quote = null
+  let started = false
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = null
+      else current += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      started = true
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (started) {
+        tokens.push(current)
+        current = ''
+        started = false
+      }
+      continue
+    }
+    current += ch
+    started = true
+  }
+  if (started) tokens.push(current)
+  return tokens
+}
+
+// {workspace} and {image} are deliberately left untouched: the caller replaces each by value,
+// per D-D, and the argv shape then guarantees a space-containing value survives as one argument.
+export function stepArgv(command, pluginDir) {
+  return shlexSplit(command).map((token) => token.replaceAll('{plugin_dir}', pluginDir))
+}
+
+function gateRunnerArgv(H, dir) {
+  return ['python3', path.join(harnessDir(H), 'img2_core', 'gate_runner.py'), '--plugin-dir', dir, '--workspace', '{workspace}']
 }
 
 // ---------------------------------------------------------------- prompts
@@ -688,6 +771,13 @@ async function confirmOrThrow(prompt) {
   } finally {
     rl.close()
   }
+}
+
+export async function confirmOutOfOrgSource(url, defaultOrg, opts) {
+  if (defaultOrg) return
+  console.log('about to clone and link a non-' + DEFAULT_ORG + ' source: ' + url)
+  if (opts.yes) return
+  await confirmOrThrow('Proceed?')
 }
 
 // ---------------------------------------------------------------- commands
@@ -761,9 +851,9 @@ async function cmdInstall(opts) {
   }
 }
 
-function resolveRefAndClone(H, spec, opts) {
+async function resolveRefAndClone(H, spec, opts) {
   const { url, label, defaultOrg } = resolveSource(spec, opts.allowAnySource)
-  if (!defaultOrg) console.log('about to clone and link a non-' + DEFAULT_ORG + ' source: ' + url)
+  await confirmOutOfOrgSource(url, defaultOrg, opts)
   const staging = path.join(pluginsDir(H), '.staging-' + process.pid)
   fs.rmSync(staging, { recursive: true, force: true })
   fs.mkdirSync(pluginsDir(H), { recursive: true })
@@ -815,7 +905,7 @@ async function cmdAdd(opts, spec) {
       manifest = readManifest(source)
       row = { id: manifest.name, repo: 'link:' + source, ref: 'local', resolvedSha: 'local', addedAt: new Date().toISOString() }
     } else {
-      const cloned = resolveRefAndClone(H, spec, opts)
+      const cloned = await resolveRefAndClone(H, spec, opts)
       staging = cloned.staging
       manifest = readManifest(staging)
       row = { id: manifest.name, repo: cloned.label, ref: cloned.ref, resolvedSha: cloned.resolvedSha, addedAt: new Date().toISOString() }
@@ -830,6 +920,13 @@ async function cmdAdd(opts, spec) {
         'plugin "' + id + '" is already registered',
         'row: ' + JSON.stringify(existing) + ' -- pass --force to replace it',
       )
+    }
+    // `--force` replaces the row wholesale, but a hand-authored key on the old row (added
+    // outside img2, e.g. a future per-row override) is not img2's to discard.
+    if (existing) {
+      for (const k of Object.keys(existing)) {
+        if (!ROW_KEYS.includes(k)) row[k] = existing[k]
+      }
     }
 
     const hosts = detectedHosts()
@@ -937,6 +1034,7 @@ async function cmdDoctor(opts) {
   const findings = []
   const err = (plugin, msg) => findings.push({ level: 'FAIL', plugin, msg })
   const warn = (plugin, msg) => findings.push({ level: 'WARN', plugin, msg })
+  const info = (plugin, msg) => findings.push({ level: 'INFO', plugin, msg })
 
   let reg = null
   try {
@@ -945,6 +1043,19 @@ async function cmdDoctor(opts) {
     err(null, e.message)
   }
   if (!fs.existsSync(harnessDir(H))) err(null, 'no harness checkout at ' + harnessDir(H) + '; run `img2 install`')
+
+  // The base skill's own link is not harness-owned (it is not a row in plugins.json), so doctor
+  // cannot judge it -- it can only report the target, which is what makes a wrong-working-copy
+  // install visible instead of silently invisible.
+  for (const key of detectedHosts()) {
+    const baseLink = path.join(HOSTS[key].skills(), LEGACY_LINK_NAME)
+    const c = classifyTarget(baseLink)
+    if (c.state === 'symlink') {
+      info(null, key + ': base skill "' + LEGACY_LINK_NAME + '" -> ' + c.resolved + (c.dangling ? ' (dangling)' : ''))
+    } else if (c.state !== 'absent') {
+      info(null, key + ': base skill "' + LEGACY_LINK_NAME + '" at ' + baseLink + ' is a ' + c.state + ', not a symlink')
+    }
+  }
 
   const manifests = new Map()
   if (reg) {
@@ -971,6 +1082,12 @@ async function cmdDoctor(opts) {
         continue
       }
       if (manifest.name !== row.id) err(row.id, 'manifest name "' + manifest.name + '" does not match the registry id')
+      if (manifest.capabilities.length > 1) {
+        warn(
+          row.id,
+          'multi-capability provider: declares ' + manifest.capabilities.length + ' capabilities; each edge resolves independently via `img2 capabilities`',
+        )
+      }
 
       let ignored = false
       try {
@@ -1041,18 +1158,24 @@ async function cmdDoctor(opts) {
       }
     }
     for (const [k, ids] of byEdge) {
-      if (ids.length > 1) warn(null, 'capability ' + k + ' is claimed by ' + ids.join(', ') + '; the index lists all, the model picks by description')
+      if (ids.length > 1) warn(null, 'capability ' + k + ' is claimed by ' + ids.join(', ') + '; `img2 capabilities` refuses to resolve this edge -- pass --plugin <id> to disambiguate')
     }
 
     if (!findings.some((f) => f.level === 'FAIL')) {
       try {
-        const drift = syncTargets(H, reg).filter((t) => {
-          try {
-            return fs.readFileSync(t.file, 'utf8') !== t.want
-          } catch {
-            return true
-          }
-        })
+        const targets = syncTargets(H, reg)
+        // Same pre-sync rule cmdCapabilities applies: `img2 install` creates generated/ but only
+        // add/remove/sync populate it, so a fresh install must not be reported as drifted.
+        const neverSynced = generatedIndexTargets(H, computeGenerated(H, reg)).every((t) => !fs.existsSync(t.file))
+        const drift = neverSynced
+          ? []
+          : targets.filter((t) => {
+              try {
+                return fs.readFileSync(t.file, 'utf8') !== t.want
+              } catch {
+                return true
+              }
+            })
         if (drift.length) err(null, 'generated artifacts are out of sync (' + drift.map((t) => t.file).join(', ') + '); run `img2 sync`')
       } catch (e) {
         err(null, e.message)
@@ -1060,9 +1183,15 @@ async function cmdDoctor(opts) {
     }
   }
 
-  for (const f of findings) console.log(f.level + '  ' + (f.plugin || '-').padEnd(20) + ' ' + f.msg)
   const fails = findings.filter((f) => f.level === 'FAIL').length
-  const warns = findings.length - fails
+  const warns = findings.filter((f) => f.level === 'WARN').length
+
+  if (opts.json) {
+    console.log(JSON.stringify({ fails, warns, findings: findings.map((f) => ({ level: f.level, plugin: f.plugin, message: f.msg })) }))
+    return fails ? EXIT.FAIL : EXIT.OK
+  }
+
+  for (const f of findings) console.log(f.level + '  ' + (f.plugin || '-').padEnd(20) + ' ' + f.msg)
   if (fails) {
     console.log('doctor: ' + fails + ' failure(s), ' + warns + ' warning(s)')
     return EXIT.FAIL
@@ -1086,6 +1215,155 @@ async function cmdSync(opts) {
   }
 }
 
+// ---------------------------------------------------------------- capability resolution (§13)
+
+// A manifest that fails full validation (e.g. schema too new) may still be legible enough to see
+// whether it claims the queried edge -- read the raw JSON ourselves rather than trusting readManifest,
+// which throws before it ever looks at "capabilities" for exactly the cases this needs to see through.
+function rawCapabilitiesClaim(manifestPath, from, to) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    return Array.isArray(raw.capabilities) && raw.capabilities.some((c) => c && c.from === from && c.to === to)
+  } catch {
+    return false
+  }
+}
+
+function buildProviderRow(H, dir, row, manifest) {
+  const stepsFile = path.join(dir, 'steps.json')
+  let steps = []
+  if (fs.existsSync(stepsFile)) {
+    steps = topoSort(readRowsFile(stepsFile), row.id + '/steps.json').map((s) => ({ id: s.id, argv: stepArgv(s.command, dir) }))
+  }
+  const gatesFile = path.join(dir, 'gates.json')
+  const gateRunner = fs.existsSync(gatesFile) ? { argv: gateRunnerArgv(H, dir) } : null
+  return { plugin: row.id, version: manifest.version, resolvedSha: row.resolvedSha, dir, steps, gateRunner }
+}
+
+async function cmdCapabilities(opts) {
+  const H = resolveImg2Home(opts.home)
+  const from = opts.fromKind || null
+  const to = opts.toKind || null
+  const query = { from, to }
+  const problems = []
+  const addProblem = (plugin, p, reason) => problems.push({ plugin, path: p, reason })
+
+  const finish = (status, providers) => {
+    // `version` is the envelope's own schema version, not the harness version -- a consumer branches
+    // on it. The harness version is advertised by `--version --json`.
+    console.log(JSON.stringify({ version: 1, contract: CONTRACT_REVISION, query, status, providers, problems }))
+    if (status === 'answered') return EXIT.OK
+    if (status === 'ambiguous') return EXIT.NEEDS_INPUT
+    return EXIT.FAIL
+  }
+
+  let reg
+  try {
+    reg = readRegistry(H)
+  } catch (e) {
+    addProblem(null, registryPath(H), e.message)
+    return finish('data-fault', [])
+  }
+
+  // Registry insertion order is mutated by `img2 add --force`; sort by id so result order is stable.
+  const rows = [...reg.plugins].sort((a, b) => a.id.localeCompare(b.id))
+  const manifests = new Map()
+  let claimedEdgeBroken = false
+
+  for (const row of rows) {
+    const dir = cloneDir(H, row.id)
+    try {
+      manifests.set(row.id, readManifest(dir))
+    } catch (e) {
+      const manifestPath = path.join(dir, 'plugin.json')
+      addProblem(row.id, manifestPath, e.message)
+      if (rawCapabilitiesClaim(manifestPath, from, to)) claimedEdgeBroken = true
+    }
+  }
+
+  // A row that claims the queried edge but cannot be read makes the answer untrustworthy; a row
+  // that is broken but irrelevant to this edge stays in problems[] while the answer still returns.
+  if (claimedEdgeBroken) return finish('data-fault', [])
+
+  const candidates = []
+  for (const row of rows) {
+    const manifest = manifests.get(row.id)
+    if (!manifest) continue
+    const matches = manifest.capabilities.filter((c) => c.from === from && c.to === to)
+    if (matches.length === 0) continue
+    const dir = cloneDir(H, row.id)
+    if (matches.length > 1) {
+      addProblem(
+        row.id,
+        path.join(dir, 'plugin.json'),
+        'declares ' + from + ' -> ' + to + ' ' + matches.length + ' times; a provider is unresolvable for an edge it declares more than once',
+      )
+      continue
+    }
+    try {
+      candidates.push(buildProviderRow(H, dir, row, manifest))
+    } catch (e) {
+      addProblem(row.id, dir, e.message)
+    }
+  }
+
+  let status, providers
+  if (opts.plugin) {
+    const named = candidates.find((c) => c.plugin === opts.plugin)
+    if (!named) {
+      if (!problems.some((p) => p.plugin === opts.plugin)) {
+        addProblem(opts.plugin, cloneDir(H, opts.plugin), 'named --plugin does not claim ' + from + ' -> ' + to)
+      }
+      return finish('data-fault', [])
+    }
+    status = 'answered'
+    providers = [named]
+  } else if (candidates.length === 0) {
+    status = 'answered'
+    providers = []
+  } else if (candidates.length === 1) {
+    status = 'answered'
+    providers = candidates
+  } else {
+    status = 'ambiguous'
+    providers = candidates
+  }
+
+  // Drift is checked last (D-F order: registry -> manifests -> edge filter -> drift) and only when
+  // every manifest read cleanly -- computeGenerated re-reads every manifest and throws on the first
+  // bad one, so attempting it while problems[] is non-empty would reintroduce the exact hazard D-F
+  // rejects reusing computeGenerated unguarded for.
+  if (problems.length === 0) {
+    let expected
+    try {
+      expected = computeGenerated(H, reg)
+    } catch (e) {
+      addProblem(null, harnessDir(H), e.message)
+      return finish('data-fault', [])
+    }
+    const targets = generatedIndexTargets(H, expected)
+    // `img2 install` creates generated/ but never populates it -- only `add`/`remove`/`sync` do. A
+    // query must answer immediately after install without first requiring a mutating `sync`, so
+    // "neither file exists yet" is the expected pre-sync state, not drift.
+    const neverSynced = targets.every((t) => !fs.existsSync(t.file))
+    const drift = neverSynced
+      ? []
+      : targets.filter((t) => {
+          try {
+            return fs.readFileSync(t.file, 'utf8') !== t.want
+          } catch {
+            return true
+          }
+        })
+    if (drift.length) {
+      for (const t of drift) addProblem(null, t.file, 'generated artifact drift; run `img2 sync`')
+      return finish('data-fault', [])
+    }
+  }
+
+  return finish(status, providers)
+}
+
 // ---------------------------------------------------------------- entry
 
 const HELP = [
@@ -1097,8 +1375,9 @@ const HELP = [
   '  img2 add --link <localpath> [--force]',
   '  img2 remove <id>',
   '  img2 list',
-  '  img2 doctor',
+  '  img2 doctor [--json]',
   '  img2 sync [--check]',
+  '  img2 capabilities [--from-kind <kind>] [--to-kind <kind>] [--plugin <id>] [--json]',
   '',
   'Options',
   '  --from <path>        clone the harness from a local checkout instead of GitHub',
@@ -1110,6 +1389,10 @@ const HELP = [
   '  --force              replace an existing registered plugin',
   '  --allow-any-source   accept a source outside the ' + DEFAULT_ORG + '/* org',
   '  --check              sync: verify generated artifacts without writing',
+  '  --from-kind <kind>   capabilities: the edge\'s source kind',
+  '  --to-kind <kind>     capabilities: the edge\'s destination kind',
+  '  --plugin <id>        capabilities: disambiguate to one named provider',
+  '  --json               version/doctor: emit machine-readable output; capabilities: implied',
   '',
   'Environment',
   '  IMG2_HOME            harness home (default ~/.img2)',
@@ -1130,6 +1413,10 @@ export function parseArgs(argv) {
     migrateLegacy: false,
     allowAnySource: false,
     check: false,
+    fromKind: null,
+    toKind: null,
+    plugin: null,
+    json: false,
     help: false,
     showVersion: false,
   }
@@ -1148,15 +1435,31 @@ export function parseArgs(argv) {
     else if (a === '--migrate-legacy') opts.migrateLegacy = true
     else if (a === '--allow-any-source') opts.allowAnySource = true
     else if (a === '--check') opts.check = true
+    else if (a === '--json') opts.json = true
     else if (a === '--home') opts.home = take(a, argv[++i])
     else if (a === '--from') opts.from = take(a, argv[++i])
     else if (a === '--ref') opts.ref = take(a, argv[++i])
     else if (a === '--link') opts.link = take(a, argv[++i])
+    else if (a === '--from-kind') opts.fromKind = take(a, argv[++i])
+    else if (a === '--to-kind') opts.toKind = take(a, argv[++i])
+    else if (a === '--plugin') opts.plugin = take(a, argv[++i])
     else if (a.startsWith('-')) throw new CliError(EXIT.REFUSED, 'unknown option: ' + a, 'run --help for the flag list')
     else if (!command) command = a
     else args.push(a)
   }
   return { command, opts, args }
+}
+
+// The version probe's `commands` list (§13, D-B) is derived from this table, not hand-written,
+// so it cannot list a command the dispatcher does not actually have.
+const COMMANDS = {
+  install: (opts) => cmdInstall(opts),
+  add: (opts, args) => cmdAdd(opts, args[0]),
+  remove: (opts, args) => cmdRemove(opts, args[0]),
+  list: (opts) => cmdList(opts),
+  doctor: (opts) => cmdDoctor(opts),
+  sync: (opts) => cmdSync(opts),
+  capabilities: (opts) => cmdCapabilities(opts),
 }
 
 async function main() {
@@ -1166,6 +1469,16 @@ async function main() {
   }
   const { command, opts, args } = parseArgs(process.argv.slice(2))
   if (opts.showVersion) {
+    if (opts.json) {
+      console.log(JSON.stringify({
+        harness: harnessVersion(),
+        maxPluginSchema: MAX_PLUGIN_SCHEMA,
+        coreApi: CORE_API,
+        contract: CONTRACT_REVISION,
+        commands: Object.keys(COMMANDS),
+      }))
+      return EXIT.OK
+    }
     console.log('img2 ' + harnessVersion() + ' (MAX_PLUGIN_SCHEMA=' + MAX_PLUGIN_SCHEMA + ', coreApi=' + CORE_API + ')')
     return EXIT.OK
   }
@@ -1173,16 +1486,11 @@ async function main() {
     console.log(HELP)
     return opts.help ? EXIT.OK : EXIT.REFUSED
   }
-  switch (command) {
-    case 'install': return cmdInstall(opts)
-    case 'add': return cmdAdd(opts, args[0])
-    case 'remove': return cmdRemove(opts, args[0])
-    case 'list': return cmdList(opts)
-    case 'doctor': return cmdDoctor(opts)
-    case 'sync': return cmdSync(opts)
-    default:
-      throw new CliError(EXIT.REFUSED, 'unknown command: ' + command, 'expected install, add, remove, list, doctor or sync')
+  const handler = COMMANDS[command]
+  if (!handler) {
+    throw new CliError(EXIT.REFUSED, 'unknown command: ' + command, 'expected ' + Object.keys(COMMANDS).join(', '))
   }
+  return handler(opts, args)
 }
 
 const invokedDirectly = (() => {

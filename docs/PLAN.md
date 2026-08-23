@@ -9,8 +9,11 @@ deepseek-ai/deepseek-harness:
 
 1. Each plugin is its **own git repo**, versioned and released independently.
 2. **One-command install** per plugin (`img2 add <org/repo>`).
-3. Adding a future plugin (img2glb, glb2threejs, …) requires **zero edits to the harness**
-   (registration; new *core capabilities* are a harness release — stated honestly).
+3. Adding a future plugin (img2glb, glb2threejs, …) for an ALREADY-DECLARED slot requires
+   **zero edits to the harness** (registration only). Declaring a NEW slot the pipeline does
+   not yet expose is a base-skill release, not a plugin install — `glb2threejs` will require
+   a base-skill edit for exactly this reason, and that is stated honestly rather than folded
+   into the zero-edits claim.
 4. The design is NOT anchored on the current img2threejs repo layout.
 
 ## Research inputs (summarized)
@@ -48,15 +51,15 @@ User-facing flow:
 npx github:img2threejs/img2 install          # $IMG2_HOME (~/.img2), host links, settings merge
 img2 add img2threejs/plugin-img2glb          # clone @tag, pin SHA, row, symlink ~/.claude/skills/img2-img2glb
 img2 doctor                                  # fail-loud static audit of every row
-img2 sync --check                            # generated index == manifests (CI-able)
+img2 sync --check                            # generated edge list == manifests' declared edges (CI-able)
 ```
 
 ## Decisions log (each was contested; alternatives rejected for cause)
 
 | # | Decision | Rejected alternative & why |
 |---|----------|---------------------------|
-| D1 | Per-plugin host symlink `img2-<id>`; no router skill | Router-only: hosts scan skills one level deep, one truncated description hides N capabilities, no skill→skill invocation exists |
-| D2 | All generated artifacts in `$IMG2_HOME/generated/`, runtime routing reads generated `routes.json` | Index inside the harness checkout: dirties git, breaks `img2 update` (tracked-dirt refusal) |
+| D1 | Per-plugin host symlink `img2-<id>`; no router skill | Router-only: one truncated description hides N capabilities; selection is documented as stochastic (a 0.5 trigger rate counts as passing), and a ~1%-of-context listing budget drops descriptions starting with the least-invoked skill — exactly what an optional per-edge provider is |
+| D2 | All generated artifacts in `$IMG2_HOME/generated/`; `img2 capabilities` is the runtime reader and recomputes from the registry and manifests, never parsing the `routes.json` cache directly | Index inside the harness checkout: dirties git, breaks `img2 update` (tracked-dirt refusal) |
 | D3 | Flat `plugins.json` rows, whole-row replacement | dsh-style layered patches: we have no profiles/bundles — YAGNI |
 | D4 | Python core linked via generated `_img2_local.py` + `IMG2_HOME` fallback; core is a real package; `require_core_api(n)` | pip install from git: PEP 668 breaks Homebrew/Debian; N interpreters on PATH = silent wrong-env installs |
 | D5 | State envelope in `<workspace>/.img2/state.json`, plugin-scoped subtrees, core-owned lock | Today's behavior (state in shared checkout) is an existing defect, not a precedent |
@@ -65,9 +68,15 @@ img2 sync --check                            # generated index == manifests (CI-
 | D8 | Harness repo named `img2` (`npx github:img2threejs/img2`), CLI `img2`, topic `img2threejs-plugin` | `harness` is meaningless outside org context; `img2-plugin` topic too generic; npm names verified free |
 | D9 | Gate contract: argv in → one JSON verdict envelope on stdout, exit 0/1/2 | Status quo: 29 review scripts, 26 print ad-hoc JSON, no shared helper — the runner must define the contract |
 | D10 | Steps as data with `after:` deps, topo-sorted, cycles = doctor error | if/elif profile insertion (today's workflow_state.py) cannot accept third-party steps |
-| D11 | Capability conflicts allowed: doctor warns, index lists both, model picks | A resolver/solver — YAGNI |
+| D11 | Capability conflicts allowed: doctor warns, `img2 capabilities` refuses to resolve the edge and names both claimants | A resolver/solver — YAGNI |
 | D12 | Chains (image→glb→threejs) EXCLUDED from test phase | Depends on artifact-kind contracts not yet written; hand-glued chain proves nothing |
+| D13 | **Owner's preference:** step and gate override is permitted; flexibility over paternalism, because a fork removes the gate AND the record | — |
 | CUT | spec_search in core, `env`/`hostRequirements` manifest fields, `img2 test`, enable/disable, layering | No consumer today; each is an hour's work the day a consumer appears |
+
+D13 is deliberately mechanism-free: every other row in this log carries the alternative it
+rejected and why; D13's justification is not yet measured, so no mechanism is recorded until
+it is. It authorizes the `overrides` reservation in `PLUGIN_CONTRACT.md` §6, not a built
+feature.
 
 ## Phases
 
@@ -91,17 +100,29 @@ all 10 tests below, binary pass/fail, results in the report.
 **Phase 4 — review with owner.** Repos stay private; walk through results; go/no-go for
 migration phases.
 
-**Phase 5 — migrate img2threejs into plugin-img2threejs** (separate effort, NOT now):
-- Ordering rule (two restructures must not race over forge/ — call-time failure mode):
-  first land or explicitly abandon `support-all-glove-subtypes` (carries a 717-line
-  uncommitted diff) and `separate-cs2-tracks-from-forge`; only then migrate.
-- Inside the migration: 1 shared `project_root()` replaces all `parents[N]` first; then
-  adapter-registry consumers (`route-cs2-family-through-adapter-registry`, 0/15, smallest
-  highest-leverage change); then move content; adapt the 28 gates to the verdict envelope
-  gradually (runner accepts a legacy-wrapper shim during transition).
-- Back-compat commitments: host link `img2threejs` preserved as an alias; `IMG2THREEJS_*`
-  env honored inside the plugin; sculpt-spec schema unchanged; artifact kinds migrate
-  mechanically (4 kinds, 6 occurrences — measured, not a crisis).
+**Follow-on change order**, each its own change, in sequence: `plugin-img2glb` (offline step
+row + declared artifact kind) → `plugin-hello-cube` (`<image>` fix, exerciser edge, version
+bump, new tag) → base-skill slot → `SKILL.md` heading merges. The base-skill slot step is
+BLOCKED on an owner decision, not an agent's: two working copies of the base skill were
+unmerged (`img2threejs` on `main`, 613-line `SKILL.md`, vs `feat/npx-skill-installer` on the
+remote, 620-line `SKILL.md`, differing by 16 files / 1760 insertions / 838 deletions), and
+every line number in the base-skill change had to be re-derived against whichever was
+chosen — see "Decisions settled 2026-08-23" below for the resolution.
+
+**Phase 5 — turn the base pipeline into data** (separate change, NOT now): see the
+`route-pipeline-slots-through-capability-providers` design's D-J for the reframing, the
+corrected step/gate inventory, and its five recorded costs (a)-(f) — this is not "move
+62K LOC into a plugin", it is "turn the pipeline into data without changing what it means."
+Ordering constraint this phase MUST respect (two restructures must not race over `forge/` —
+a call-time failure mode): land or explicitly abandon `support-all-glove-subtypes` (29/44)
+and `separate-cs2-tracks-from-forge` (0/39) before migrating. Both proposals live in
+`openspec-from-img2/changes/` and must be adopted into the OpenSpec root or explicitly
+retired first, because `separate-cs2-tracks-from-forge` restructures the same `forge/` tree
+the migration moves — see "Decisions settled 2026-08-23" below for the resolution. The
+"717-line uncommitted diff" `support-all-glove-subtypes` was said to carry was NEVER in a
+working tree: `git status --porcelain` in the checkout that cited it showed only
+`?? graphify-out/`, so the figure came from proposal prose, not a working tree, and nothing
+was lost when that checkout was deleted.
 
 **Phase 6 — go public:** publish `img2` to npm (name verified free — reserve it), repos
 public, topic `img2threejs-plugin` on every plugin, README quickstarts, deprecate the old
@@ -148,6 +169,33 @@ state read-modify-write — `update_plugin_state()` added holding the lock acros
 cycle (contract §11 amended; the old pattern measurably lost 20/40 writes under the new
 concurrency test).
 
+## Change 1 applied — harness 0.2.0 (2026-08-24)
+
+`route-pipeline-slots-through-capability-providers` sections 1-7 applied. Suites green: **59 node +
+36 python**. Delivered: the three live v0.1.1 defects closed (metacharacter refusal in
+`commandFinding`, `confirmOrThrow` in `cmdAdd` for out-of-org sources, `resolve_workspace` refusing
+any skill or plugin checkout); `img2 capabilities` with the always-JSON envelope, argv-tokenised step
+commands and per-row failure isolation; `img2 --version --json` advertising `contract: 14` and the
+derived `commands` list; `img2 doctor --json`, the multi-capability WARN, the base-host-link report,
+and the deletion of the false "the model picks by description" claim; `plugin.json` refusing an
+`overrides` key and `img2 add --force` preserving user-authored row keys.
+
+Acceptance re-run in a fake-`HOME` sandbox: test 18 — after `img2 add --link plugin-img2glb` the
+harness checkout is porcelain-clean and `img2 capabilities --from-kind image --to-kind glb` answers
+with `img2glb`; test 19 — `--version --json` lists `capabilities` in `commands`.
+
+Two defects found during manager verification, not by the implementing agents, both fixed with
+regression tests:
+- **`img2 doctor` failed on a fresh install.** `cmdDoctor`'s drift check had no never-synced guard, so
+  the first command a new user runs after `img2 install` exited 1 with "generated artifacts are out of
+  sync". `cmdCapabilities` had the guard; `cmdDoctor` did not. The asymmetry was the bug.
+- **The capabilities envelope reported the harness version in its `version` field**, where the
+  envelope's own schema version belongs — a consumer branching on it would have read `"0.1.1"` instead
+  of `1`. The harness version is advertised by `--version --json` and nowhere else.
+
+`.omc/` and `_img2_local.py` added to `.gitignore` so the zero-core-edits claim is literally true of
+`git status --porcelain`, not true modulo operational dirt.
+
 ## Risks
 
 | Risk | Mitigation |
@@ -157,3 +205,75 @@ concurrency test).
 | TRELLIS endpoint flaky/needs network | `--probe` offline mode is the tested path; live call manual |
 | Two restructures race over forge/ | Explicit ordering rule in Phase 5; harness phase touches zero existing files |
 | Legacy installs orphaned | `img2 install` migrates `~/.img2threejs`; `IMG2THREEJS_HOME` honored one release |
+
+## Open Questions
+
+- **Deferred: `img2 doctor --strict` (FAIL on any WARN).** `cmdDoctor` returns `EXIT.OK` with
+  any number of warnings (`bin/img2.mjs`, end of `cmdDoctor`), so no WARN can fail an
+  automated check today. Shipping `--strict` now would silently convert existing advisory
+  WARNs into build breaks for existing installs. This change's own enforcement of its
+  warnings is the query's machine-readable `problems[]`/`providers[]` split with its own exit
+  codes (D-E), not `--strict`. `--strict` becomes load-bearing the day the first WARN-level
+  finding must fail a build, and every such finding known today (an active override, a
+  missing declared Python package) is itself deferred, so there is nothing yet for it to
+  enforce.
+- **Override precondition**, not yet a contract SHALL: override does not ship until the gate
+  ledger has a writer, a home, and a test that fails when a disabled or overridden gate is
+  omitted from the run record, and until `img2 doctor`'s surfacing of an active override is
+  specified down to its message and exit consequence. Evidence: `img2_core/gate_runner.py`
+  is per-plugin-directory, prints its aggregate to stdout and persists nothing (`:147`), and
+  the only durable per-pass record (`reviewHistory` in the sculpt spec) has no field that
+  could hold a gate roster — so two reports, one with all gates and one with three disabled,
+  are byte-indistinguishable today.
+- **Deferred: `requires.python.packages` detect-and-report** (D-K). When built: an optional
+  additive `requires.python.packages` list in `plugin.json` (absent means unknown, no schema
+  bump), and a doctor WARN naming the plugin, the missing package, the probed interpreter,
+  the install command, and which steps still work without it. The CORRECTED probe is
+  `python3 -I -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('X')
+  else 3)"`, run with the cwd set OUTSIDE every clone; declared package names MUST match
+  `^[A-Za-z_][A-Za-z0-9_]*$` and be top-level only (`find_spec('a.b')` still imports `a`);
+  the interpreter is derived from the step row's `argv[0]`, never assumed to be `python3` on
+  doctor's PATH. Why the correction matters: `python3 -c "import X"` puts the cwd on
+  `sys.path[0]`, so it executes a plugin-supplied `X.py` during `img2 doctor` — exactly what
+  §4's static-trust boundary forbids.
+- **What a future `glb2threejs` provider is allowed to do.** `img2threejs/SKILL.md:88`
+  states the raw GLB is never pixel evidence and its topology/materials are never copied
+  into the factory; `:34` plus `CLAUDE.md`'s code-only promise forbid photogrammetry, mesh
+  extraction, or downloaded art packs; the existing `integrations/` contract permits an
+  external tool to produce evidence and diagnostics but not to silently provide meshes,
+  decide hidden geometry, mutate the accepted source, or approve a pass. A provider that
+  translates GLB geometry into Three.js code contradicts that identity; a provider that
+  derives evidence from a GLB (proportions, semantic regions, comparison baselines, capture
+  profiles) is consistent with it. The base skill already performs `glb → threejs-code` in
+  the GLB-mediated track, so the open question is which implementation is permitted, not
+  whether the step exists. Deferred to the owner — see "Decisions settled 2026-08-23" below
+  for how it was closed.
+- **The closed placeholder set lands ahead of pipeline-as-data and constrains it.** The base
+  pipeline's own step commands use `{reference}` (9), `{spec}` (8), `{pass_id}` (4),
+  `{path}`, `{total}`, `{step_id}`, `{pass_count}`, `{expected_id}`, `{current_pass}`, none
+  of which are in `{plugin_dir}`/`{workspace}`/`{image}`. Phase 5 must therefore either widen
+  the permitted set (undoing part of this change's hardening) or rewrite every step command
+  before it can express the base pipeline as `steps.json` rows. The guard is still correct to
+  land first.
+
+## Decisions settled 2026-08-23
+
+Three owner decisions, closing the corresponding open questions above and in Phase 5:
+
+(a) **Base-skill work branches from `main`, NOT from `feat/npx-skill-installer`.** `main`
+carries the 613-line `SKILL.md` and does not contain the npx-installer commits, which stay
+unmerged on their own branch. No line number for the deferred base-skill change may be
+derived from the 620-line variant.
+
+(b) **The eleven proposals previously living only in `openspec-from-img2/` are ADOPTED into
+the OpenSpec root**: `support-all-glove-subtypes` (29/44), `separate-cs2-tracks-from-forge`
+(0/39), `route-cs2-family-through-adapter-registry` (0/15), `guide-unsupported-cs2-families`
+(0/22), `add-npx-skill-installer` (80/83), plus six glove/typecheck changes. Phase 5's
+ordering rule now points at live changes in the OpenSpec root rather than at a backup
+directory.
+
+(c) **`glb2threejs` is not scheduled and no phase reaches it.** If it is ever built it
+follows whatever `SKILL.md` defines at that time, which today means the evidence-producing
+kind, because `SKILL.md:88` forbids copying GLB topology or materials into the factory. The
+open question above is therefore CLOSED by deferring to the product contract rather than by
+choosing a design.
