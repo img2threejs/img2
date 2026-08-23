@@ -453,6 +453,43 @@ function mergeSettingsFile(file, dir) {
   return changed
 }
 
+// ---------------------------------------------------------------- launcher
+
+export function launcherCandidates(envPath, homeDir) {
+  const onPath = new Set(String(envPath || '').split(path.delimiter).filter(Boolean))
+  return [path.join(homeDir, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].filter((d) => onPath.has(d))
+}
+
+function ensureLauncher(H) {
+  const target = path.join(harnessDir(H), 'bin', 'img2.mjs')
+  try {
+    fs.chmodSync(target, 0o755)
+  } catch {}
+  const mineSuffix = path.join('harness', 'bin', 'img2.mjs')
+  for (const dir of launcherCandidates(process.env.PATH, home())) {
+    const link = path.join(dir, 'img2')
+    let st = null
+    try {
+      st = fs.lstatSync(link)
+    } catch {}
+    if (st && !(st.isSymbolicLink() && fs.readlinkSync(link).endsWith(mineSuffix))) {
+      console.log('  launcher  ' + link + ' exists and is not ours; skipped')
+      continue
+    }
+    try {
+      if (st) fs.unlinkSync(link)
+      fs.symlinkSync(target, link)
+      console.log('  launcher  ' + link + ' -> ' + target)
+      return
+    } catch {
+      continue
+    }
+  }
+  console.log('  launcher  no writable dir on PATH among ~/.local/bin, /opt/homebrew/bin, /usr/local/bin;')
+  console.log('            add one, or use: alias img2="node ' + target + '"')
+  console.log('            (every command also works as: npx github:img2threejs/img2 <command>)')
+}
+
 // ---------------------------------------------------------------- rows files (steps/gates)
 
 function readRowsFile(file) {
@@ -708,6 +745,8 @@ async function cmdInstall(opts) {
       git(['clone', '-q', src, hd])
       console.log('  cloned    ' + src + ' -> ' + hd)
     }
+
+    ensureLauncher(H)
 
     if (fs.existsSync(HOSTS.claude.configRoot())) {
       const changed = mergeSettingsFile(HOSTS.claude.settings(), H)
