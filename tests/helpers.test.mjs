@@ -150,3 +150,12 @@ test('validateManifest rejects malformed fields', () => {
   throwsCli(() => validateManifest({ ...goodManifest(), capabilities: [{ from: 'image' }] }), EXIT.FAIL, /capability/)
   throwsCli(() => validateManifest({ ...goodManifest(), requires: undefined }), EXIT.FAIL, /requires/)
 })
+
+test('launcherCandidates returns only known bins that are on PATH, in preference order', async () => {
+  const { launcherCandidates } = await import('../bin/img2.mjs')
+  const home = '/Users/someone'
+  const P = ['/usr/bin', home + '/.local/bin', '/usr/local/bin'].join(':')
+  assert.deepEqual(launcherCandidates(P, home), [home + '/.local/bin', '/usr/local/bin'])
+  assert.deepEqual(launcherCandidates('/usr/bin:/bin', home), [])
+  assert.deepEqual(launcherCandidates('', home), [])
+})

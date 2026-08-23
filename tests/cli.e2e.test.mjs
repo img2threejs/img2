@@ -354,3 +354,27 @@ test('the harness checkout stays git-clean through add and sync', (t) => {
   })
   assert.equal(porcelain.trim(), '', 'registering a plugin must not dirty the harness checkout')
 })
+
+test('install links an img2 launcher into a writable PATH dir and respects foreign files', (t) => {
+  const sb = makeSandbox(t)
+  const harnessSrc = makeHarnessRepo(sb.root)
+  const localBin = path.join(sb.HOME, '.local', 'bin')
+  fs.mkdirSync(localBin, { recursive: true })
+  const env = { ...sb.env, PATH: localBin + path.delimiter + process.env.PATH }
+
+  let r = run(['install', '--from', harnessSrc, '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const link = path.join(localBin, 'img2')
+  assert.equal(fs.readlinkSync(link), path.join(sb.H, 'harness', 'bin', 'img2.mjs'))
+
+  r = run(['install', '--from', harnessSrc, '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr)
+  assert.ok(fs.lstatSync(link).isSymbolicLink())
+
+  fs.unlinkSync(link)
+  fs.writeFileSync(link, '#!/bin/sh\n')
+  r = run(['install', '--from', harnessSrc, '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stdout, /not ours; skipped/)
+  assert.equal(fs.readFileSync(link, 'utf8'), '#!/bin/sh\n')
+})

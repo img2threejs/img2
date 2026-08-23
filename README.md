@@ -14,13 +14,18 @@ the gate runner, and the contract.
 ## Quickstart
 
 ```bash
-npx github:img2threejs/img2 install     # $IMG2_HOME (~/.img2), harness checkout, host settings
+npx github:img2threejs/img2 install     # $IMG2_HOME (~/.img2), harness checkout, host settings,
+                                        # and an `img2` launcher linked into a writable PATH dir
+                                        # (~/.local/bin, /opt/homebrew/bin, or /usr/local/bin —
+                                        # if none qualifies, install prints an alias to use instead)
 img2 add img2threejs/plugin-img2glb     # clone @ newest tag, pin SHA, link ~/.claude/skills/img2-img2glb
 img2 list                               # registered plugins: id, version, ref, sha
 img2 doctor                             # fail-loud static audit of every row
 img2 sync --check                       # generated index == manifests (CI-able)
 img2 remove img2glb                     # unlink every host, move clone to backups, drop the row
 ```
+
+Every command also runs without the launcher: `npx github:img2threejs/img2 <command>`.
 
 Developing a plugin locally:
 
