@@ -82,7 +82,7 @@ const cloneDir = (H, id) => path.join(pluginsDir(H), id)
 const linkName = (id) => LINK_PREFIX + id
 const localStanza = (H) => 'CORE = ' + JSON.stringify(harnessDir(H)) + '\n'
 
-function harnessVersion() {
+export function harnessVersion() {
   try {
     const here = path.dirname(fileURLToPath(import.meta.url))
     return JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version

@@ -128,8 +128,10 @@ installer path in img2threejs/img2threejs with a pointer.
 ## Phase 2–3 results (2026-08-22)
 
 Thin slice built and tagged `v0.1.0` on all three repos (harness `1013a62`, hello-cube
-`da8babc`, img2glb `353a8ea`). Unit suites: harness 20/20 node + 32 python; hello-cube 6;
-img2glb 12 — all green, independently re-run.
+`da8babc`, img2glb `353a8ea`). Unit suites: harness 22 node + 32 python; hello-cube 6; img2glb 12 — all green.
+Note: the v0.1.1 launcher release bumped `package.json` without re-running the suite, leaving two
+version assertions hardcoded to `0.1.0` red on `main` until they were changed to derive the expected
+value from the exported `harnessVersion()`. Re-run both suites after any version bump.
 
 Acceptance: tests 1–3, 5–10 **pass** as written (test 2's zero-core-edit check: both
 harness checkouts `git status --porcelain` empty after `add`). Test 4 passed its
