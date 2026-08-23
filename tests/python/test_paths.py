@@ -48,6 +48,50 @@ class ResolveWorkspaceTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     resolve_workspace(root / "img2home")
 
+    def test_skill_checkout_with_forge_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "img2home").mkdir()
+            skill_dir = root / "skill-checkout"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text("# skill\n")
+            (skill_dir / "forge").mkdir()
+            with mock.patch.dict(os.environ, {"IMG2_HOME": str(root / "img2home")}):
+                with self.assertRaises(ValueError):
+                    resolve_workspace(skill_dir)
+
+    def test_renamed_skill_checkout_with_tools_is_still_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "img2home").mkdir()
+            skill_dir = root / "skill-checkout"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text("# skill\n")
+            (skill_dir / "tools").mkdir()
+            with mock.patch.dict(os.environ, {"IMG2_HOME": str(root / "img2home")}):
+                with self.assertRaises(ValueError):
+                    resolve_workspace(skill_dir)
+
+    def test_plugin_checkout_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "img2home").mkdir()
+            plugin_dir = root / "plugin-checkout"
+            plugin_dir.mkdir()
+            (plugin_dir / "plugin.json").write_text("{}\n")
+            with mock.patch.dict(os.environ, {"IMG2_HOME": str(root / "img2home")}):
+                with self.assertRaises(ValueError):
+                    resolve_workspace(plugin_dir)
+
+    def test_ordinary_project_without_checkout_markers_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "img2home").mkdir()
+            project = root / "project"
+            project.mkdir()
+            with mock.patch.dict(os.environ, {"IMG2_HOME": str(root / "img2home")}):
+                self.assertEqual(resolve_workspace(project), project)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,10 @@ enforced by `img2 doctor` (statically) or by the CLI at the named command.
    install/link plumbing, the plugin registry, the workspace state envelope, the gate
    runner, and this contract.
 2. **Composition is data.** The set of active plugins is `$IMG2_HOME/plugins.json` — flat
-   rows, editable by hand, no layering, whole-row replacement.
+   plugin rows, editable by hand, no layering, whole-row replacement. This governs how a
+   PLUGIN row is composed; it does not forbid a user-authored, non-plugin top-level key (§6,
+   "Reserved: `overrides`") — that key holds the user's own pipeline choices, not
+   plugin-layered composition, so the no-layering rule continues to govern plugin rows only.
 3. **Fail loud.** A plugin that cannot fully activate blocks the command that touched it,
    naming the plugin and the reason. No silent partial activation.
 4. **Static trust.** The harness never imports or executes plugin code during `add`,
@@ -75,9 +78,10 @@ gates.json         # gates contributed (optional, §9)
   (`MAX_PLUGIN_SCHEMA` in the CLI); a higher value MUST be refused, never best-effort
   parsed.
 - `name` — `[a-z][a-z0-9-]*`, unique per registry; doubles as the row `id` and link name.
-- `capabilities` — declared `{from, to}` typed edges. Conflicts (two plugins claiming the
-  same edge) are ALLOWED: `img2 doctor` warns, the generated index lists both, the model
-  picks by description. No solver.
+- `capabilities` — the ONLY capability declaration surface. SKILL.md frontmatter, including
+  any `metadata` block, is NEVER read for capabilities. Declared `{from, to}` typed edges.
+  Two plugins claiming the same edge is a LEGAL install: `img2 doctor` warns, and
+  `img2 capabilities` (§13) refuses to resolve that edge, naming both claimants. No solver.
 - `requires.harness` — semver range. `requires.coreApi` — integer, asserted at runtime by
   the bootstrap stanza (§8). Mismatch on either BLOCKS at `img2 add` and `img2 sync`
   (named row, both versions printed). Never a warning: a warned-through mismatch can emit
@@ -85,7 +89,11 @@ gates.json         # gates contributed (optional, §9)
 
 Deliberately NOT in schema 1 (do not re-add without a consumer): `env`,
 `hostRequirements`, `searchProfiles`, `vocab`, capability chains, enable/disable flags,
-layered config.
+layered config, `fulfills`/slot-name fields, a `support` level enum. The documented upgrade
+path for a provider that genuinely claims two edges from one manifest is per-step
+`provides: {from, to, artifact: {kind, path}}` in `steps.json` (§10), doctor-validated
+against the manifest — it is strictly more expressive than a manifest-level field and is
+adopted the day a provider actually needs it, per the project's own CUT rule.
 
 ## 6. plugins.json (registry)
 
@@ -110,6 +118,30 @@ layered config.
   `--ref <branch>` and is recorded as such. `resolvedSha` is always recorded so a user's
   setup is reproducible.
 
+### Reserved: `overrides`
+
+A future release may define an `overrides` object addressing base-pipeline steps and gates.
+Its address space, replacement semantics, precedence and location are ALL OPEN and belong to
+the change that implements it — this contract reserves the key and fixes only the following
+four rules; it defines no mechanism.
+
+1. **Overrides are user-authored.** `plugin.json` has NO override field and MUST NOT gain
+   one; a plugin MUST NOT declare an override about itself or any other plugin — installing
+   or upgrading a plugin therefore never changes a pipeline.
+2. **An override value is a reference to an existing row, NEVER an inline command.** A
+   command supplied through an override would bypass the placeholder and metacharacter
+   checks (§10, §13).
+3. **A harness that does not implement overrides MUST report the key as an unrecognised
+   registry entry** — `img2 doctor` FAILs, naming the row — **and MUST NOT silently proceed
+   as though the pipeline were unmodified.** It does NOT brick unaffected commands: today's
+   registry reader validates only `version === 1` and `Array.isArray`, so an unknown
+   top-level key draws zero findings, and preserve-silently-report-nothing is precisely the
+   silent no-op this rule exists to prevent — silently ignoring a block that disables a
+   quality gate is the failure this reservation exists to prevent.
+4. **`overrides` is user-owned data.** Any command that rewrites a registry row MUST
+   preserve it verbatim and report what it preserved. `img2 remove` deletes it with the row,
+   by design.
+
 ## 7. Trust boundary
 
 - `img2 add <spec>` accepts `org/repo`, a URL, or `--link <localpath>` (symlink a local
@@ -125,11 +157,25 @@ layered config.
 ## 8. Host integration & Python bootstrap
 
 - Each plugin is linked as its OWN skill: `~/.claude/skills/img2-<id>/ →
-  $IMG2_HOME/plugins/<id>/` (same pattern per host via the HOSTS table). No router skill:
-  hosts scan one level deep, skill descriptions are truncated in listings, and there is no
-  skill→skill invocation. The link NAME is harness-derived (`img2-` prefix mandatory);
-  plugins do not choose it. `img2 doctor` and `img2 remove` MUST refuse to touch a link at
-  that path whose target is not under `$IMG2_HOME`.
+  $IMG2_HOME/plugins/<id>/` (same pattern per host via the HOSTS table). No router skill: the
+  rationale rests on the documented eviction risk and trigger rate, not on any claimed
+  measurement of host scanning depth or skill→skill invocation. Skill listings are shortened
+  to fit a budget of roughly 1% of the context window, dropping descriptions "starting with
+  the skills you invoke least" — an optional per-edge provider is, by construction, the
+  least-invoked skill. Description-based, model-triggered activation is documented as
+  stochastic: the authoring guidance treats a 0.5 trigger rate as passing. A router skill
+  would put every provider behind one description subject to that eviction and that trigger
+  rate; a per-plugin link keeps each provider's own description live and independently
+  triggerable. The link NAME is harness-derived (`img2-` prefix mandatory); plugins do not
+  choose it. `img2 doctor` and `img2 remove` MUST refuse to touch a link at that path whose
+  target is not under `$IMG2_HOME`.
+- SKILL.md frontmatter MAY set `disable-model-invocation` to require an explicit
+  slash-command invocation instead of model-triggered discovery. This is documented as
+  SHOULD, not MUST: it is Claude-Code-only — other hosts ignore it — and the harness never
+  parses SKILL.md frontmatter to enforce it (this is the same ground on which §5 refuses to
+  read `metadata` for capabilities). The eviction-budget and 0.5-trigger-rate figures above
+  come from Claude Code's own authoring documentation; their provenance is UNVERIFIED by this
+  project's own measurement and is recorded here as cited, not confirmed.
 - `img2 install` merges `$IMG2_HOME` into `permissions.additionalDirectories` in the
   host's settings (`~/.claude/settings.json`), idempotently, preserving unknown keys.
   Without this every plugin read is a permission prompt.
@@ -181,10 +227,15 @@ blocking fail. A gate that prints a malformed envelope is an `error`, not a pass
 
 ## 10. Workflow steps
 
-`steps.json` rows: `{ "id", "title", "command", "after": ["<step-id>", …] }`. The harness
-topo-sorts contributed steps from all active plugins; `after` may reference another
-plugin's step id. A cycle or an unknown reference is an `img2 doctor` error (fail loud,
-never a guessed order).
+`steps.json` rows: `{ "id", "title", "command", "after": ["<step-id>", …] }`. `command` MAY
+use only the closed placeholder set `{plugin_dir}`, `{workspace}` and `{image}` — `img2
+doctor` FAILs a command containing any other `{…}` placeholder or any `<…>`
+pseudo-placeholder (§12). A caller consumes `command` as an already-tokenised `argv` array:
+`{plugin_dir}` is substituted per token, and `{workspace}`/`{image}` are left as their own
+single elements for the caller to replace by value — never as a shell string, and never
+through a shell (§13). The harness topo-sorts contributed steps from all active plugins;
+`after` may reference another plugin's step id. A cycle or an unknown reference is an `img2
+doctor` error (fail loud, never a guessed order).
 
 ## 11. Workspace state
 
@@ -203,5 +254,70 @@ never a guessed order).
 
 manifest schema + version ranges · declared files exist · id/link uniqueness and link
 ownership · gitignore covers `_img2_local.py` · static boundary greps (§8) · steps/gates
-JSON shape, topo-sortable, commands exist · generated index in sync (`img2 sync --check`,
-non-zero on drift — dump == mount).
+JSON shape, topo-sortable, commands exist · shell-metacharacter refusal in every
+`steps.json`/`gates.json` command (§10, §13) · closed-placeholder-set enforcement on the
+same commands (§10, §13) · a multi-capability provider draws a WARN naming the plugin and
+its capability count, without affecting doctor's exit code (§13) · the base host link's
+target is reported so a wrong-working-copy install is visible · generated index in sync
+(`img2 sync --check`, non-zero on drift — dump == mount).
+
+## 13. Capability resolution
+
+`img2 capabilities [--from-kind <k>] [--to-kind <k>] [--plugin <id>] [--json]` answers "which
+installed provider serves edge X→Y". It is READ-ONLY: it takes no lock and writes nothing —
+no registry mutation, no clone mutation, no generated artifact.
+
+Resolution is by declared typed edge ONLY — the `capabilities` array in `plugin.json` (§5).
+Description text, name similarity, model inference and file-system naming convention are
+NEVER used to resolve an edge.
+
+The command prints exactly one JSON envelope on stdout for every outcome it owns:
+
+```json
+{ "version": "0.2.0", "contract": 14, "query": { "from": "image", "to": "glb" },
+  "status": "answered",
+  "providers": [ { "plugin": "img2glb", "version": "0.1.0", "resolvedSha": "abc123…",
+    "dir": "<clone path>", "steps": [ { "id": "…", "argv": ["python3", "…"] } ] } ],
+  "problems": [] }
+```
+
+`status` is one of `answered` | `ambiguous` | `data-fault`. A caller branches on `status`
+alone — the exit code is a redundant convenience, never the primary signal. Zero providers is
+`answered` with `providers: []`: a normal answer, not an error. A registered plugin whose
+manifest cannot be read or validated is reported in `problems` (`{plugin, path, reason}`)
+while `providers` still answers, UNLESS that plugin claims the queried edge, in which case
+`status` is `data-fault`. Drift refusal is scoped to `generated/index.md` and
+`generated/routes.json` ONLY — a stale `_img2_local.py` in an unrelated clone never refuses
+an answer.
+
+A provider declaring more than one DISTINCT capability edge resolves on each edge
+independently; it is unresolvable only for an edge it declares more than once, because that
+edge alone is ambiguous within the single provider. `--plugin <id>` disambiguates an
+`ambiguous` result to a single row, or reports `data-fault` when the named plugin does not
+claim the queried edge.
+
+Each step row carries `argv`: already tokenised, `{plugin_dir}` substituted per token,
+`{workspace}` and `{image}` left as their own elements for the caller to replace by value.
+The caller never composes a shell string and never invokes a shell.
+
+Exit codes reuse the table in `CONTRIBUTING.md` with nothing re-coded: **0** `answered`,
+**1** `EXIT.FAIL` for `data-fault`, **3** `EXIT.NEEDS_INPUT` for `ambiguous`. **2 is never
+used by this subcommand** — it stays the harness-wide "request not understood" signal, which
+doubles as the absence signal below.
+
+Absence is detected by a positive probe, never inferred from a non-zero exit.
+`img2 --version --json` emits `{harness, maxPluginSchema, coreApi, contract, commands[]}`. A
+caller treats capability resolution as absent when `--json` is unrecognised or
+`capabilities` is missing from `commands[]` — NEVER by matching stderr text, and NEVER by
+treating exit 2 alone as absence, since a legitimate refusal is also exit 2.
+
+## 14. Workspace ownership
+
+`<workspace>/.img2/state.json` (§11) is written ONLY by plugin tools, through
+`img2_core.state.update_plugin_state`. A base pipeline is not a plugin: it has no
+`_img2_local.py` and cannot import `img2_core`, so it MUST NOT write into this file — doing
+so would hand-roll the envelope and duplicate the lock. A base pipeline's own delegation
+record belongs in its OWN state file — for `img2threejs`, its existing checklist authority —
+never in `<workspace>/.img2/state.json`. This decision is recorded now even though the
+writer is deferred, so the base-skill change this contract anticipates inherits the split
+rather than re-deciding it, and the workspace state surface stays at one file per owner.
