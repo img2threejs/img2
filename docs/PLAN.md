@@ -196,6 +196,60 @@ regression tests:
 `.omc/` and `_img2_local.py` added to `.gitignore` so the zero-core-edits claim is literally true of
 `git status --porcelain`, not true modulo operational dirt.
 
+## Honesty carve-out on the zero-edits claim (task 6.9)
+
+"Adding a plugin requires zero edits to the harness" is true for a provider serving an
+**already-declared** capability edge, and it is mechanically tested: after `img2 add`, the harness
+checkout stays `git status --porcelain`-clean (acceptance test 2, re-run and passing).
+
+It is NOT true for a new KIND of capability. Declaring a new slot — a point where the base pipeline
+asks for a provider it has never asked for — is a base-skill release, because the base skill is what
+holds the question. Concretely: adding a second `image → glb` provider costs nothing; adding
+`glb2threejs` means the base skill must acquire a place that asks for `glb → threejs-code`. The
+research base flagged this as the known cost of this model (a router must be updated per capability
+kind, which is an Open-Closed violation), and it is recorded here rather than left implied by a claim
+that reads as absolute.
+
+## Follow-on change order (task 6.10)
+
+1. **`plugin-img2glb`** — add an offline-capable step row. Its only row hardcodes the live TRELLIS
+   path, and `gradio_client` is absent on the maintainer's machine, so the step dies on import today.
+   Nothing downstream can be verified without a provider whose step runs offline.
+2. **`plugin-hello-cube`** — done ahead of order at v0.1.1 (`<image>` → `{image}`); its remaining item
+   is whether it should stop declaring the product's own `image → threejs-code` edge.
+3. **Base-skill consultation** — the base skill asks `img2 capabilities` at an existing optional step.
+   Step 1c of The Loop ("Optional fidelity evidence adapters") is already scoped exactly for this:
+   on the mainline, explicitly optional, and its authority boundary is already written in
+   `docs/integrations/reference_fidelity_tooling.md` ("external tools may produce evidence and
+   diagnostics; they may not…"). No new slot is required, which removes the objection that the
+   GLB-mediated section is only reachable once a GLB already exists.
+4. **Row schema / pipeline-as-data** — gated on the lab experiment's measured field count, not on a
+   guess. See the lab findings on branch `lab/pipeline-as-data`.
+
+Owner decision recorded: work branches from `main`; `feat/npx-skill-installer` stays unmerged on the
+remote.
+
+## Acceptance re-run after v0.2.1 (task 8.3)
+
+All ten original acceptance tests re-run in a fresh fake-`HOME` sandbox against the shipped harness.
+**9 pass, 1 manual.**
+
+| # | Result | Evidence |
+|---|---|---|
+| 1 | pass | `install --from` → `$IMG2_HOME` layout complete, exit 0 |
+| 2 | pass | row carries `resolvedSha`, host symlink created, harness checkout porcelain-clean |
+| 3 | pass | repeat `add` exits 1 naming the existing row |
+| 4 | **manual** | needs a live agent session; not automatable |
+| 5 | pass | `sync --check` 0 → 1 after a manifest edit → 0 after `sync` |
+| 6 | pass | both plugins emit `img2.gate-run`; hello-cube exits 0, img2glb's blocking gate exits 1 |
+| 7 | pass | two concurrent writers, 15 increments each, both subtrees exact, lock respected |
+| 8 | pass | `requires.harness ">=99.0.0"` → `add` exits 1 naming both versions |
+| 9 | pass | `doctor` exits 1 catching BOTH `parents[N]` and the cross-plugin import |
+| 10 | pass | `remove` leaves zero dangling symlinks on any host, receipts cleared |
+
+Plus the two tests this change added: 18 (zero-core-edits extended to the query surface) and 19
+(old-harness detected as absence through `--version --json`).
+
 ## Risks
 
 | Risk | Mitigation |
