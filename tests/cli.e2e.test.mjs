@@ -969,15 +969,20 @@ test('a prose step declaring actor agent is handed back as an instruction, never
   fs.writeFileSync(path.join(p, '.gitignore'), '_img2_local.py\n')
   fs.writeFileSync(path.join(p, 'steps.json'), JSON.stringify([
     // Prose, with punctuation a shell would choke on -- legal because nothing executes it.
-    { id: 's1', title: 't', actor: 'agent', command: 'Analyze the image (all four views) & note the wear', after: [] },
+    { id: 's1', title: 't', actor: 'agent', command: 'Analyze {plugin_dir}/notes.md (all four views) & note the wear', after: [] },
   ]))
 
   run(['add', '--link', p], sb.env, sb.root)
   const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
   const env = JSON.parse(r.stdout)
   assert.equal(env.status, 'answered', env.problems.map((x) => x.reason).join('; '))
+  // {plugin_dir} must be resolved in an instruction too: a reader cannot expand it.
   assert.deepEqual(env.providers[0].steps, [
-    { id: 's1', actor: 'agent', instruction: 'Analyze the image (all four views) & note the wear' },
+    {
+      id: 's1',
+      actor: 'agent',
+      instruction: `Analyze ${path.join(sb.H, 'plugins', 'agentrow')}/notes.md (all four views) & note the wear`,
+    },
   ])
   assert.ok(!('argv' in env.providers[0].steps[0]), 'an agent row must carry no argv at all')
 })

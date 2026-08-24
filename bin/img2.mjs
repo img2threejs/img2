@@ -1302,7 +1302,11 @@ function buildProviderRow(H, dir, row, manifest) {
     // caller to execute, so there is nothing for it to execute by accident.
     steps = topoSort(readRowsFile(stepsFile), row.id + '/steps.json').map((s) => {
       const actor = s.actor || 'program'
-      return actor === 'program' ? { id: s.id, actor, argv: stepArgv(s.command, dir) } : { id: s.id, actor, instruction: s.command }
+      if (actor === 'program') return { id: s.id, actor, argv: stepArgv(s.command, dir) }
+      // {plugin_dir} is resolved for an instruction too. A reader cannot expand it -- handing back
+      // "Read {plugin_dir}/grimoire/..." tells an agent to read a path that does not exist.
+      // {workspace} and {image} are deliberately left for the caller to fill by value, as in argv.
+      return { id: s.id, actor, instruction: s.command.replaceAll('{plugin_dir}', dir) }
     })
   }
   const gatesFile = path.join(dir, 'gates.json')
