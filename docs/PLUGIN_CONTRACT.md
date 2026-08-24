@@ -227,7 +227,7 @@ blocking fail. A gate that prints a malformed envelope is an `error`, not a pass
 
 ## 10. Workflow steps
 
-`steps.json` rows: `{ "id", "title", "command", "after": ["<step-id>", …] }`. `command` MAY
+`steps.json` rows: `{ "id", "title", "command", "actor", "after": ["<step-id>", …] }`. `command` MAY
 use only the closed placeholder set `{plugin_dir}`, `{workspace}` and `{image}` — `img2
 doctor` FAILs a command containing any other `{…}` placeholder or any `<…>`
 pseudo-placeholder (§12). A caller consumes `command` as an already-tokenised `argv` array:
@@ -236,6 +236,33 @@ single elements for the caller to replace by value — never as a shell string, 
 through a shell (§13). The harness topo-sorts contributed steps from all active plugins;
 `after` may reference another plugin's step id. A cycle or an unknown reference is an `img2
 doctor` error (fail loud, never a guessed order).
+
+### `actor` — who carries out the row
+
+`actor` is OPTIONAL and MUST be one of `program`, `agent` or `human`. It defaults to `program`. An
+unrecognised value is refused, never defaulted.
+
+- **`program`** — the row is executable. It is handed back as `argv`, and its `argv[0]` MUST be
+  either a path form (containing a path separator, and existing) or one of the interpreters
+  `python3`, `python`, `node`, `bash`, `sh`. A bare word is REFUSED.
+- **`agent`** / **`human`** — the row is prose. It is handed back as `instruction` (the raw
+  `command` string) and carries **no `argv` key at all**, so there is nothing for a caller to
+  execute. The shell-metacharacter and argv[0] rules do not apply, because nothing is executed; the
+  closed placeholder set still does.
+
+A gate MUST be `actor: "program"` — a gate has to produce a verdict, so it cannot be delegated to a
+human or to the agent.
+
+**Why `argv[0]` may not be a bare word.** A caller executes `argv[0]` directly, so a prose word that
+merely happens to sit on `PATH` is a silent-execution hazard, not a typo. Measured on a stock macOS
+box: `Read` resolves to `/usr/bin/Read` through case-insensitive APFS, and `Analyze` resolves to a
+real ImageMagick binary — so the prose row `Analyze the reference image` would run ImageMagick with
+the prose as its arguments and exit 0. Before this rule the capability query answered such a row
+with `status: "answered"`, exit 0, `problems: []`. This supersedes the KNOWN LIMIT recorded in §13:
+a static check still cannot tell prose from a command, so the row declares which it is, and the
+default is the one that fails loud rather than the one that executes. A plugin that genuinely needs
+a bare-word program wraps it in a script under `{plugin_dir}`, which also gives it somewhere to
+check that the program is installed.
 
 ## 11. Workspace state
 
@@ -293,10 +320,12 @@ or an existing file. A provider failing either goes to `problems` and the status
 no clean provider remains — the query and doctor MUST NOT disagree, because a caller is told to branch
 on `status` and would otherwise execute a command doctor had already refused.
 
-KNOWN LIMIT: a static check cannot distinguish prose that happens to parse as a command from a real
-command. `Read notes.md and analyze {image}` uses only legal placeholders and resolves `argv[0]` on a
-case-insensitive filesystem, so it passes both checks and still is not a program. Declaring a row's
-actor is the only reliable fix and is deferred with the rest of the row-schema work.
+CLOSED (was a KNOWN LIMIT): a static check still cannot distinguish prose that happens to parse as a
+command from a real command — `Read notes.md and analyze {image}` uses only legal placeholders and
+resolves `argv[0]` on a case-insensitive filesystem. The fix is not a better heuristic but the
+`actor` field in §10: the row declares whether a program, the agent or a human carries it out, a
+`program` row's `argv[0]` may not be a bare word, and a non-program row is handed back as an
+`instruction` with no `argv` at all.
 
 `status` is one of `answered` | `ambiguous` | `data-fault`. A caller branches on `status`
 alone — the exit code is a redundant convenience, never the primary signal. Zero providers is

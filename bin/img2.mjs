@@ -666,7 +666,35 @@ export function staticToolFindings(pluginDir, id, allIds) {
 const ALLOWED_PLACEHOLDERS = new Set(['{plugin_dir}', '{workspace}', '{image}'])
 const SHELL_METACHAR_RE = /[;|&$`><()\n]/
 
-export function commandFinding(command, pluginDir) {
+// Who carries out a row. Only a "program" row is handed back as argv; "agent" and "human" rows are
+// handed back as an instruction string, which is how a prose step is expressed legally.
+export const ROW_ACTORS = new Set(['program', 'agent', 'human'])
+
+// A caller executes argv[0] directly, so a bare word that merely happens to sit on PATH is the
+// dangerous case -- not a typo. Measured on a stock macOS box: "Read" resolves to /usr/bin/Read
+// (case-insensitive APFS) and "Analyze" resolves to a real ImageMagick binary, so the prose row
+// `Analyze the reference image` would run ImageMagick with the prose as its arguments and exit 0.
+// No static check can tell prose from a command, so a program row's argv[0] must be a path form --
+// which cannot collide with an English word by accident -- or one of these interpreters. Anything
+// else must either be wrapped in a script under {plugin_dir} or declare a non-program actor.
+const INTERPRETERS = new Set(['python3', 'python', 'node', 'bash', 'sh'])
+
+// Validates a whole row: the actor it declares, then its command under that actor's rules. Doctor
+// and the capability query both come through here, so they cannot drift apart.
+export function rowFinding(row, pluginDir, isGate = false) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return 'row is not a JSON object'
+  if ('actor' in row) {
+    if (!ROW_ACTORS.has(row.actor)) {
+      return '"actor" must be one of ' + [...ROW_ACTORS].join(', ') + ' (got ' + JSON.stringify(row.actor) + ')'
+    }
+    if (isGate && row.actor !== 'program') {
+      return 'a gate must be executable: "actor" must be "program", not ' + JSON.stringify(row.actor) + ', because a gate has to produce a verdict'
+    }
+  }
+  return commandFinding(row.command, pluginDir, row.actor || 'program')
+}
+
+export function commandFinding(command, pluginDir, actor = 'program') {
   if (typeof command !== 'string' || !command.trim()) return 'empty "command"'
 
   const bracePattern = /\{[^{}]*\}/g
@@ -682,10 +710,27 @@ export function commandFinding(command, pluginDir) {
     return 'command uses angle-bracket pseudo-placeholder ' + angle[0] + '; a shell would read this as redirection, not a placeholder'
   }
 
+  // Everything below concerns executing the command. A row carried out by the agent or a human is
+  // never executed, so prose is legal there -- including the punctuation a shell would choke on.
+  if (actor !== 'program') return null
+
   const stripped = command.replaceAll('{plugin_dir}', '').replaceAll('{workspace}', '').replaceAll('{image}', '')
   const metachars = stripped.match(new RegExp(SHELL_METACHAR_RE, 'g'))
   if (metachars) {
     return 'command contains shell metacharacter(s) ' + [...new Set(metachars)].join(' ') + '; commands run without a shell and must not need one'
+  }
+
+  const argv0 = (shlexSplit(command)[0] || '').replaceAll('{plugin_dir}', pluginDir)
+  if (argv0.includes(path.sep)) {
+    if (!fs.existsSync(path.resolve(pluginDir, argv0))) return 'argv[0] "' + argv0 + '" does not exist'
+  } else if (!INTERPRETERS.has(argv0)) {
+    return (
+      'argv[0] "' +
+      argv0 +
+      '" is a bare word, not a path and not a known interpreter (' +
+      [...INTERPRETERS].join(', ') +
+      '); a bare word can silently resolve to an unrelated program on PATH. Wrap it in a script under {plugin_dir}, or if this row is prose for the agent to carry out, declare "actor": "agent"'
+    )
   }
 
   for (const token of command.split(/\s+/).filter(Boolean)) {
@@ -1120,7 +1165,7 @@ async function cmdDoctor(opts) {
           const rows = readRowsFile(gatesFile)
           for (const g of topoSort(rows, row.id + '/gates.json')) {
             if ('blocking' in g && typeof g.blocking !== 'boolean') err(row.id, 'gates.json: "' + g.id + '" has a non-boolean "blocking"')
-            const bad = commandFinding(g.command, dir)
+            const bad = rowFinding(g, dir, true)
             if (bad) err(row.id, 'gates.json "' + g.id + '": ' + bad)
           }
         } catch (e) {
@@ -1133,7 +1178,7 @@ async function cmdDoctor(opts) {
           const rows = readRowsFile(stepsFile)
           for (const s of rows) {
             if (typeof s.title !== 'string' || !s.title) err(row.id, 'steps.json: "' + (s.id || '?') + '" needs a string "title"')
-            const bad = commandFinding(s.command, dir)
+            const bad = rowFinding(s, dir, false)
             if (bad) err(row.id, 'steps.json "' + (s.id || '?') + '": ' + bad)
             allSteps.push(s)
           }
@@ -1242,36 +1287,23 @@ export function unsafeRowFinding(dir) {
       return { file, reason: e.message }
     }
     for (const r of rows) {
-      const bad = commandFinding(r && r.command, dir)
+      const bad = rowFinding(r, dir, name === 'gates.json')
       if (bad) return { file, reason: name + ' "' + (r && r.id) + '": ' + bad }
-      // A caller executes argv[0] directly. An interpreter that is neither on PATH nor a real file
-      // is a runtime surprise the query can see coming, so it belongs in problems[] instead.
-      const argv0 = String(r.command).trim().split(/\s+/)[0].replaceAll('{plugin_dir}', dir)
-      if (!resolvesAsProgram(argv0, dir)) {
-        return { file, reason: name + ' "' + r.id + '": argv[0] "' + argv0 + '" is not on PATH and is not an existing file' }
-      }
     }
   }
   return null
-}
-
-function resolvesAsProgram(argv0, dir) {
-  if (argv0.includes(path.sep)) return fs.existsSync(path.resolve(dir, argv0))
-  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean)
-  return dirs.some((d) => {
-    try {
-      return fs.statSync(path.join(d, argv0)).isFile()
-    } catch {
-      return false
-    }
-  })
 }
 
 function buildProviderRow(H, dir, row, manifest) {
   const stepsFile = path.join(dir, 'steps.json')
   let steps = []
   if (fs.existsSync(stepsFile)) {
-    steps = topoSort(readRowsFile(stepsFile), row.id + '/steps.json').map((s) => ({ id: s.id, argv: stepArgv(s.command, dir) }))
+    // A non-program row is handed back as an instruction, never as argv -- there is nothing for the
+    // caller to execute, so there is nothing for it to execute by accident.
+    steps = topoSort(readRowsFile(stepsFile), row.id + '/steps.json').map((s) => {
+      const actor = s.actor || 'program'
+      return actor === 'program' ? { id: s.id, actor, argv: stepArgv(s.command, dir) } : { id: s.id, actor, instruction: s.command }
+    })
   }
   const gatesFile = path.join(dir, 'gates.json')
   const gateRunner = fs.existsSync(gatesFile) ? { argv: gateRunnerArgv(H, dir) } : null

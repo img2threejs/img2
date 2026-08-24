@@ -533,6 +533,7 @@ test('capabilities: one provider row carries version, resolvedSha, dir, and argv
   assert.deepEqual(p0.steps, [
     {
       id: 'convert',
+      actor: 'program',
       argv: ['python3', path.join(sb.H, 'plugins', 'img2glb', 'tools', 'noop.py'), '--workspace', '{workspace}', '--image', '{image}'],
     },
   ])
@@ -922,5 +923,106 @@ test('capabilities reports an argv[0] that cannot be executed', (t) => {
   const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
   const env = JSON.parse(r.stdout)
   assert.equal(env.status, 'data-fault')
-  assert.match(env.problems[0].reason, /argv\[0\] "python3\.99" is not on PATH/)
+  assert.match(env.problems[0].reason, /argv\[0\] "python3\.99" is a bare word, not a path and not a known interpreter/)
+})
+
+// The real-world case this closes. Both rows are verbatim from forge/_shared/workflow_state.py, and
+// both argv[0]s resolve to a real program on a stock macOS box -- "Read" to /usr/bin/Read via
+// case-insensitive APFS, "Analyze" to an ImageMagick binary -- so before this check the query
+// answered `status: "answered"`, exit 0, problems: [], and handed the caller argv it would have run.
+for (const [label, command] of [
+  ['Read', 'Read grimoire/intake/cs2_intake_contract.md completely'],
+  ['Analyze', 'Analyze the reference image for wear pattern'],
+])
+  test('capabilities refuses a prose step whose argv[0] happens to be on PATH: ' + label, (t) => {
+    const sb = installed(t)
+    const p = path.join(sb.root, 'plugin-prose-' + label)
+    fs.mkdirSync(p, { recursive: true })
+    fs.writeFileSync(path.join(p, 'plugin.json'), JSON.stringify({
+      schema: 1, name: 'prose' + label.toLowerCase(), version: '0.0.1', description: 'prose row',
+      capabilities: [{ from: 'c', to: 'd' }],
+      requires: { harness: '>=0.2.0', coreApi: 1 },
+    }))
+    fs.writeFileSync(path.join(p, 'SKILL.md'), 'x\n')
+    fs.writeFileSync(path.join(p, '.gitignore'), '_img2_local.py\n')
+    fs.writeFileSync(path.join(p, 'steps.json'), JSON.stringify([{ id: 's1', title: 't', command, after: [] }]))
+
+    run(['add', '--link', p], sb.env, sb.root)
+    const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
+    const env = JSON.parse(r.stdout)
+    assert.equal(env.status, 'data-fault', 'a prose row must not be answered as executable')
+    assert.notEqual(r.status, 0, 'exit 0 on a prose row is the silent success this closes')
+    assert.match(env.problems[0].reason, /is a bare word, not a path and not a known interpreter/)
+    assert.match(env.problems[0].reason, /"actor": "agent"/, 'the refusal must name the legal way to express prose')
+  })
+
+test('a prose step declaring actor agent is handed back as an instruction, never as argv', (t) => {
+  const sb = installed(t)
+  const p = path.join(sb.root, 'plugin-agentrow')
+  fs.mkdirSync(p, { recursive: true })
+  fs.writeFileSync(path.join(p, 'plugin.json'), JSON.stringify({
+    schema: 1, name: 'agentrow', version: '0.0.1', description: 'agent row',
+    capabilities: [{ from: 'c', to: 'd' }],
+    requires: { harness: '>=0.2.0', coreApi: 1 },
+  }))
+  fs.writeFileSync(path.join(p, 'SKILL.md'), 'x\n')
+  fs.writeFileSync(path.join(p, '.gitignore'), '_img2_local.py\n')
+  fs.writeFileSync(path.join(p, 'steps.json'), JSON.stringify([
+    // Prose, with punctuation a shell would choke on -- legal because nothing executes it.
+    { id: 's1', title: 't', actor: 'agent', command: 'Analyze the image (all four views) & note the wear', after: [] },
+  ]))
+
+  run(['add', '--link', p], sb.env, sb.root)
+  const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
+  const env = JSON.parse(r.stdout)
+  assert.equal(env.status, 'answered', env.problems.map((x) => x.reason).join('; '))
+  assert.deepEqual(env.providers[0].steps, [
+    { id: 's1', actor: 'agent', instruction: 'Analyze the image (all four views) & note the wear' },
+  ])
+  assert.ok(!('argv' in env.providers[0].steps[0]), 'an agent row must carry no argv at all')
+})
+
+test('a gate may not delegate to the agent', (t) => {
+  const sb = installed(t)
+  const p = path.join(sb.root, 'plugin-agentgate')
+  fs.mkdirSync(p, { recursive: true })
+  fs.writeFileSync(path.join(p, 'plugin.json'), JSON.stringify({
+    schema: 1, name: 'agentgate', version: '0.0.1', description: 'agent gate',
+    capabilities: [{ from: 'c', to: 'd' }],
+    requires: { harness: '>=0.2.0', coreApi: 1 },
+  }))
+  fs.writeFileSync(path.join(p, 'SKILL.md'), 'x\n')
+  fs.writeFileSync(path.join(p, '.gitignore'), '_img2_local.py\n')
+  fs.writeFileSync(path.join(p, 'gates.json'), JSON.stringify([
+    { id: 'g1', actor: 'agent', command: 'Decide whether it looks right', blocking: true, after: [] },
+  ]))
+
+  run(['add', '--link', p], sb.env, sb.root)
+  const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
+  const env = JSON.parse(r.stdout)
+  assert.equal(env.status, 'data-fault')
+  assert.match(env.problems[0].reason, /a gate must be executable/)
+})
+
+test('an unknown actor is refused rather than defaulted', (t) => {
+  const sb = installed(t)
+  const p = path.join(sb.root, 'plugin-badactor')
+  fs.mkdirSync(p, { recursive: true })
+  fs.writeFileSync(path.join(p, 'plugin.json'), JSON.stringify({
+    schema: 1, name: 'badactor', version: '0.0.1', description: 'bad actor',
+    capabilities: [{ from: 'c', to: 'd' }],
+    requires: { harness: '>=0.2.0', coreApi: 1 },
+  }))
+  fs.writeFileSync(path.join(p, 'SKILL.md'), 'x\n')
+  fs.writeFileSync(path.join(p, '.gitignore'), '_img2_local.py\n')
+  fs.writeFileSync(path.join(p, 'x.py'), 'print(1)\n')
+  fs.writeFileSync(path.join(p, 'steps.json'), JSON.stringify([
+    { id: 's1', title: 't', actor: 'robot', command: 'python3 {plugin_dir}/x.py', after: [] },
+  ]))
+
+  run(['add', '--link', p], sb.env, sb.root)
+  const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
+  const env = JSON.parse(r.stdout)
+  assert.equal(env.status, 'data-fault')
+  assert.match(env.problems[0].reason, /"actor" must be one of program, agent, human/)
 })
