@@ -1229,6 +1229,44 @@ function rawCapabilitiesClaim(manifestPath, from, to) {
   }
 }
 
+// One source of truth for "is this plugin's declared work safe to hand to a caller". Doctor reports
+// it as a finding; the query refuses on it. Both call commandFinding so they cannot drift apart.
+export function unsafeRowFinding(dir) {
+  for (const name of ['steps.json', 'gates.json']) {
+    const file = path.join(dir, name)
+    if (!fs.existsSync(file)) continue
+    let rows
+    try {
+      rows = readRowsFile(file)
+    } catch (e) {
+      return { file, reason: e.message }
+    }
+    for (const r of rows) {
+      const bad = commandFinding(r && r.command, dir)
+      if (bad) return { file, reason: name + ' "' + (r && r.id) + '": ' + bad }
+      // A caller executes argv[0] directly. An interpreter that is neither on PATH nor a real file
+      // is a runtime surprise the query can see coming, so it belongs in problems[] instead.
+      const argv0 = String(r.command).trim().split(/\s+/)[0].replaceAll('{plugin_dir}', dir)
+      if (!resolvesAsProgram(argv0, dir)) {
+        return { file, reason: name + ' "' + r.id + '": argv[0] "' + argv0 + '" is not on PATH and is not an existing file' }
+      }
+    }
+  }
+  return null
+}
+
+function resolvesAsProgram(argv0, dir) {
+  if (argv0.includes(path.sep)) return fs.existsSync(path.resolve(dir, argv0))
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  return dirs.some((d) => {
+    try {
+      return fs.statSync(path.join(d, argv0)).isFile()
+    } catch {
+      return false
+    }
+  })
+}
+
 function buildProviderRow(H, dir, row, manifest) {
   const stepsFile = path.join(dir, 'steps.json')
   let steps = []
@@ -1300,12 +1338,28 @@ async function cmdCapabilities(opts) {
       )
       continue
     }
+    // The query must refuse exactly what doctor refuses. Without this the two disagree, and a caller
+    // told to branch on `status` executes a command doctor had already failed -- on a
+    // case-insensitive filesystem `Read foo.md` even resolves to /usr/bin/read and exits 0, so the
+    // caller reads silent success. A provider with any unsafe row is not a usable answer for the
+    // edge; it belongs in problems[], never in providers[].
+    const unsafe = unsafeRowFinding(dir)
+    if (unsafe) {
+      addProblem(row.id, unsafe.file, unsafe.reason)
+      claimedEdgeBroken = true
+      continue
+    }
     try {
       candidates.push(buildProviderRow(H, dir, row, manifest))
     } catch (e) {
       addProblem(row.id, dir, e.message)
+      claimedEdgeBroken = true
     }
   }
+
+  // Re-check after the row scan: a provider filtered out above claimed this edge, so an empty answer
+  // here is a configuration fault, not absence.
+  if (claimedEdgeBroken && !candidates.length) return finish('data-fault', [])
 
   let status, providers
   if (opts.plugin) {
