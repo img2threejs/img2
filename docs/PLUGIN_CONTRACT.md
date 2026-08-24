@@ -277,9 +277,15 @@ The command prints exactly one JSON envelope on stdout for every outcome it owns
 { "version": "0.2.0", "contract": 14, "query": { "from": "image", "to": "glb" },
   "status": "answered",
   "providers": [ { "plugin": "img2glb", "version": "0.1.0", "resolvedSha": "abc123…",
-    "dir": "<clone path>", "steps": [ { "id": "…", "argv": ["python3", "…"] } ] } ],
+    "dir": "<clone path>", "steps": [ { "id": "…", "argv": ["python3", "…"] } ],
+    "gateRunner": { "argv": ["python3", "-m", "img2_core.gate_runner", "…"] } } ],
   "problems": [] }
 ```
+
+Each provider row carries `steps` in topological order, each with an `argv` already tokenised and
+`{plugin_dir}`-resolved, leaving `{workspace}` and `{image}` as single elements for the caller to
+replace by value. `gateRunner` is the argv that runs that provider's `gates.json` through
+`img2_core.gate_runner`, or `null` when the plugin ships no gates.
 
 `status` is one of `answered` | `ambiguous` | `data-fault`. A caller branches on `status`
 alone — the exit code is a redundant convenience, never the primary signal. Zero providers is

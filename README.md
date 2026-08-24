@@ -20,12 +20,56 @@ npx github:img2threejs/img2 install     # $IMG2_HOME (~/.img2), harness checkout
                                         # if none qualifies, install prints an alias to use instead)
 img2 add img2threejs/plugin-img2glb     # clone @ newest tag, pin SHA, link ~/.claude/skills/img2-img2glb
 img2 list                               # registered plugins: id, version, ref, sha
-img2 doctor                             # fail-loud static audit of every row
+img2 doctor                             # fail-loud static audit of every row (--json for tooling)
 img2 sync --check                       # generated index == manifests (CI-able)
 img2 remove img2glb                     # unlink every host, move clone to backups, drop the row
 ```
 
 Every command also runs without the launcher: `npx github:img2threejs/img2 <command>`.
+
+## Asking which provider serves a capability
+
+`img2 capabilities` answers "which installed plugin turns X into Y" for a caller — a base pipeline
+consulting it at a step, or you at a prompt. It is read-only, takes no lock and writes nothing.
+
+```bash
+img2 capabilities --from-kind image --to-kind glb --json
+```
+
+```json
+{ "version": 1, "contract": 14,
+  "query": { "from": "image", "to": "glb" },
+  "status": "answered",
+  "providers": [{ "plugin": "img2glb", "version": "0.1.0", "resolvedSha": "353a8ea…",
+                  "dir": "/Users/you/.img2/plugins/img2glb",
+                  "steps": [{ "id": "generate-glb", "argv": ["python3", "…/tools/img2glb.py",
+                              "--image", "{image}", "--workspace", "{workspace}"] }],
+                  "gateRunner": { "argv": ["python3", "-m", "img2_core.gate_runner", "…"] } }],
+  "problems": [] }
+```
+
+Four properties a caller can rely on:
+
+- **One JSON envelope on stdout for every outcome it owns**, including failures. Branch on `status`
+  (`answered` | `ambiguous` | `data-fault`) — never on stderr text.
+- **Step commands come back as `argv` arrays**, already tokenised, with `{plugin_dir}` resolved and
+  `{workspace}`/`{image}` left as single elements to replace by value. You never build a shell string,
+  so a path containing a space cannot split and a plugin cannot smuggle in a second command.
+- **Exit codes reuse the harness table**: `0` answered (zero providers is a normal answer), `1` a data
+  fault, `3` an ambiguous edge — resolve it with `--plugin <id>`. This subcommand never exits `2`, so
+  `2` still means "this harness does not understand you".
+- **One broken plugin cannot deny an unrelated answer.** A plugin whose manifest fails to read lands
+  in `problems[]` while `providers[]` still answers.
+
+To detect whether a harness supports this at all, without parsing prose:
+
+```bash
+img2 --version --json    # {"harness":"0.2.0","maxPluginSchema":1,"coreApi":1,
+                         #  "contract":14,"commands":[…,"capabilities"]}
+```
+
+An unrecognised `--json`, or `capabilities` missing from `commands`, means the feature is absent —
+treat that as "no provider" and take your built-in path, rather than as an error.
 
 Developing a plugin locally:
 
