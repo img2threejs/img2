@@ -287,6 +287,17 @@ Each provider row carries `steps` in topological order, each with an `argv` alre
 replace by value. `gateRunner` is the argv that runs that provider's `gates.json` through
 `img2_core.gate_runner`, or `null` when the plugin ships no gates.
 
+A provider is returned in `providers` only if every row of its `steps.json` and `gates.json` passes
+the same static checks `img2 doctor` applies, and every row's `argv[0]` resolves to a program on PATH
+or an existing file. A provider failing either goes to `problems` and the status is `data-fault` when
+no clean provider remains — the query and doctor MUST NOT disagree, because a caller is told to branch
+on `status` and would otherwise execute a command doctor had already refused.
+
+KNOWN LIMIT: a static check cannot distinguish prose that happens to parse as a command from a real
+command. `Read notes.md and analyze {image}` uses only legal placeholders and resolves `argv[0]` on a
+case-insensitive filesystem, so it passes both checks and still is not a program. Declaring a row's
+actor is the only reliable fix and is deferred with the rest of the row-schema work.
+
 `status` is one of `answered` | `ambiguous` | `data-fault`. A caller branches on `status`
 alone — the exit code is a redundant convenience, never the primary signal. Zero providers is
 `answered` with `providers: []`: a normal answer, not an error. A registered plugin whose

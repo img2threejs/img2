@@ -871,3 +871,56 @@ test('a fresh install with zero plugins is clean to doctor and answerable by cap
   assert.equal(env.version, 1, 'envelope version is the envelope schema, not the harness version')
   assert.equal(typeof env.contract, 'number')
 })
+
+test('capabilities refuses a provider whose declared work doctor would fail', (t) => {
+  const sb = installed(t)
+  const bad = path.join(sb.root, 'plugin-prose')
+  fs.mkdirSync(bad, { recursive: true })
+  fs.writeFileSync(path.join(bad, 'plugin.json'), JSON.stringify({
+    schema: 1, name: 'prose', version: '0.0.1', description: 'prose command',
+    capabilities: [{ from: 'image', to: 'proseout' }],
+    requires: { harness: '>=0.2.0', coreApi: 1 },
+  }))
+  fs.writeFileSync(path.join(bad, 'SKILL.md'), 'x\n')
+  fs.writeFileSync(path.join(bad, '.gitignore'), '_img2_local.py\n')
+  // Verbatim shape of a real base-pipeline row: an instruction to the model, not a program.
+  fs.writeFileSync(path.join(bad, 'steps.json'), JSON.stringify([
+    { id: 'image-analysis', title: 't', command: 'Read grimoire/intake/image_analysis.md and analyze {reference}', after: [] },
+  ]))
+
+  let r = run(['add', '--link', bad], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr)
+
+  r = run(['doctor'], sb.env, sb.root)
+  assert.equal(r.status, 1, 'doctor must fail the unrecognised placeholder')
+
+  r = run(['capabilities', '--from-kind', 'image', '--to-kind', 'proseout', '--json'], sb.env, sb.root)
+  const env = JSON.parse(r.stdout)
+  assert.equal(env.status, 'data-fault', 'the query must agree with doctor, not answer')
+  assert.deepEqual(env.providers, [], 'an unsafe provider is never handed to a caller')
+  assert.match(env.problems[0].reason, /unrecognised placeholder \{reference\}/)
+  assert.equal(r.status, 1)
+})
+
+test('capabilities reports an argv[0] that cannot be executed', (t) => {
+  const sb = installed(t)
+  const p = path.join(sb.root, 'plugin-badinterp')
+  fs.mkdirSync(p, { recursive: true })
+  fs.writeFileSync(path.join(p, 'plugin.json'), JSON.stringify({
+    schema: 1, name: 'badinterp', version: '0.0.1', description: 'missing interpreter',
+    capabilities: [{ from: 'c', to: 'd' }],
+    requires: { harness: '>=0.2.0', coreApi: 1 },
+  }))
+  fs.writeFileSync(path.join(p, 'SKILL.md'), 'x\n')
+  fs.writeFileSync(path.join(p, '.gitignore'), '_img2_local.py\n')
+  fs.writeFileSync(path.join(p, 'x.py'), 'print(1)\n')
+  fs.writeFileSync(path.join(p, 'steps.json'), JSON.stringify([
+    { id: 's1', title: 't', command: 'python3.99 {plugin_dir}/x.py --workspace {workspace}', after: [] },
+  ]))
+
+  run(['add', '--link', p], sb.env, sb.root)
+  const r = run(['capabilities', '--from-kind', 'c', '--to-kind', 'd', '--json'], sb.env, sb.root)
+  const env = JSON.parse(r.stdout)
+  assert.equal(env.status, 'data-fault')
+  assert.match(env.problems[0].reason, /argv\[0\] "python3\.99" is not on PATH/)
+})
