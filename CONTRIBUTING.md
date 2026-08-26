@@ -4,7 +4,9 @@ Two kinds of contribution, two paths:
 
 - **A new capability** (image→X, X→threejs, …) is a **new plugin in its own repo** — it
   never lands in this repo. Follow `docs/WRITING_A_PLUGIN.md`; copy
-  [`plugin-hello-cube`](https://github.com/img2threejs/plugin-hello-cube) as the starter.
+  [`plugin-hello-cube`](https://github.com/img2threejs/plugin-hello-cube) as the starter. For what the
+  tutorial does not cover — adding a whole domain, placing a step relative to a base step, or what to
+  do when you want to override a gate — see [`docs/plugin-wiki/`](docs/plugin-wiki/README.md).
 - **A change to the harness itself** (CLI, `img2_core`, the contract) belongs here. Read on.
 
 ## House rules (enforced, not aspirational)

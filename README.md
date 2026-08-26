@@ -4,12 +4,22 @@ Plugin harness for the img2 ecosystem: everything is a plugin. The harness ships
 capability — it owns install/link plumbing, the plugin registry, the workspace state envelope,
 the gate runner, and the contract.
 
-- Contract (normative): [docs/PLUGIN_CONTRACT.md](docs/PLUGIN_CONTRACT.md)
-- Writing a plugin: [docs/WRITING_A_PLUGIN.md](docs/WRITING_A_PLUGIN.md) — start by copying
-  [plugin-hello-cube](https://github.com/img2threejs/plugin-hello-cube), the reference plugin
-- Contributing to the harness: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Plan: [docs/PLAN.md](docs/PLAN.md)
-- Ecosystem discovery: GitHub topic `img2threejs-plugin`
+## Documentation, and which one to read
+
+| Document | Its job |
+|---|---|
+| [docs/PLUGIN_CONTRACT.md](docs/PLUGIN_CONTRACT.md) | **Normative.** The rules. Where anything else disagrees with it, it wins |
+| [docs/WRITING_A_PLUGIN.md](docs/WRITING_A_PLUGIN.md) | **Your first plugin, start to finish.** A linear tutorial — copy [plugin-hello-cube](https://github.com/img2threejs/plugin-hello-cube) and follow it |
+| [docs/plugin-wiki/](docs/plugin-wiki/README.md) | **Everything after that.** Why the architecture is shaped this way, eleven worked scenarios — add a domain, insert a step before a base step, add a gate, what to do instead of overriding one — and a field-by-field reference |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Changing the harness itself |
+| [SECURITY.md](SECURITY.md) | The threat model, and how to review a plugin before installing it |
+| [CHANGELOG.md](CHANGELOG.md) | What changed per release |
+| [docs/PLAN.md](docs/PLAN.md) | Phase status and the decisions behind it |
+
+`docs/PLUGIN_ARCHITECTURE.md` is a generated single-page build of the wiki — read the wiki instead,
+unless you want the whole thing in one file.
+
+Ecosystem discovery: GitHub topic `img2threejs-plugin`.
 
 ## Quickstart
 
