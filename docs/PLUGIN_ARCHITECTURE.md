@@ -1,17 +1,15 @@
 # img2threejs Plugin Wiki
 
-`img2threejs` is a plugin host. This page covers why the skill was refactored this way, how it
-works, how to write a plugin, how to change the frame's behaviour, and what the frame refuses.
+Why the skill was refactored this way, how it works, how to write a plugin, how to change the
+frame's behaviour, and what the frame refuses.
 
 Single-page build of `docs/plugin-wiki/` — the wiki is the source, this is generated.
-
-`img2threejs` is a plugin host. These pages cover why, how, and — mostly — how to write one.
 
 | page | read it when |
 |---|---|
 | [01 — Why, and what changed](#why-and-what-changed) | you want the motivation, or you are worried something was taken away |
 | [02 — How it works](#how-it-works) | you need the architecture: resolution, splicing, the merge, the boundaries |
-| [03 — Cookbook](#cookbook) | **you are building something.** Ten worked scenarios, each with real files |
+| [03 — Cookbook](#cookbook) | **you are building something.** Eleven worked scenarios, each with real files |
 | [04 — Reference](#reference) | every field, every refusal, and the known gaps |
 
 `PLUGIN_CONTRACT.md` is normative. Where a wiki page and the contract disagree, the contract wins.
@@ -1043,9 +1041,10 @@ Every field, every refusal, the checklist, and the known gaps.
 | field | notes |
 |---|---|
 | `schema` | manifest schema version. `1` today |
-| `name` | the plugin id; also the directory name under `$IMG2_HOME/plugins/` |
+| `name` | `[a-z][a-z0-9-]*`. Becomes the registry id, the directory under `$IMG2_HOME/plugins/`, **and** the host link suffix (`~/.claude/skills/img2-<name>`) — you do not choose the link name |
+| `description` | one line. Shown in `img2 list` and the generated index |
 | `capabilities` | array of typed edges `{from, to}`. **The only thing resolution matches on.** Several edges draws a `doctor` WARN, not an error |
-| `requires` | compatibility floor: `harness` semver range, `coreApi` integer |
+| `requires` | compatibility floor: `harness` semver range, `coreApi` integer. **A mismatch BLOCKS at `img2 add` and `img2 sync`** — pick honest floors. Only `>=X.Y.Z` parses; nothing else does |
 | ~~`overrides`~~ | **must never exist.** Install fails if present |
 
 ### `domain.json` — the domain profile
@@ -1150,6 +1149,79 @@ One verdict envelope on stdout:
 pass** — the rule that keeps a broken gate from reading as green. `img2_core.gate_runner` aggregates
 envelopes and stops the workflow on a blocking fail.
 
+**The envelope's `status` and the exit code must agree.** A gate printing `status: "pass"` and exiting
+`1`, or `status: "fail"` and exiting `0`, is downgraded to `error` — the runner checks
+`returncode != EXPECTED_EXIT[status]` and does not take your word for either half.
+
+Test through the real runner, not by calling your tool directly:
+
+```bash
+python3 -m img2_core.gate_runner --plugin-dir <your repo> --workspace <tmp>
+```
+
+### Tools — the bootstrap stanza, and what `doctor` greps for
+
+Every tool opens with this stanza **verbatim** (contract §8). Copy it from
+`plugin-hello-cube/tools/emit_cube.py` rather than retyping it:
+
+```python
+import os, sys
+root = os.environ.get("IMG2_HOME")
+if root: sys.path.insert(0, os.path.join(root, "harness"))
+else:
+    try: import _img2_local; sys.path.insert(0, _img2_local.CORE)
+    except ImportError: sys.exit("img2: core not linked - run `img2 sync`")
+from img2_core import require_core_api
+require_core_api(1)
+```
+
+After it you have `img2_core`:
+
+```python
+from img2_core import state as core_state
+from img2_core.paths import resolve_workspace
+
+ws = resolve_workspace(args.workspace)
+core_state.update_plugin_state(ws, PLUGIN_ID, lambda s: {**s, "lastRun": stamp})
+```
+
+Static rules `img2 doctor` enforces by grep — a violation fails the audit, it does not warn:
+
+| Rule | Why |
+|---|---|
+| **stdlib only** in `tools/` | third-party is allowed only behind a lazily-imported, documented network or live path — never on the probe or test path |
+| **no `Path(__file__).parents[N]`** root computation | it breaks the moment the plugin is linked rather than cloned |
+| **never import another plugin** | there is no plugin-to-plugin API; hand off through an artifact |
+| **never import harness internals beyond `img2_core`** | everything else is private and will move |
+| **state mutations only through `update_plugin_state`** | the lock must be held across the whole read-modify-write |
+| **outputs to `<workspace>/.img2/artifacts/<plugin-id>/`** | a per-plugin subdirectory, so two plugins cannot collide |
+| **never write into any checkout** | that is somebody's git working tree |
+
+### `SKILL.md`
+
+YAML frontmatter plus a body. The **`description` is the only thing in the model's context at session
+start**, so it decides whether your plugin is ever found. Write it as a trigger — what it does plus
+when to use it, in concrete nouns:
+
+```markdown
+---
+name: img2-glb2threejs
+description: Converts a GLB mesh into procedural Three.js code. Use when the user has a .glb file and wants editable Three.js geometry.
+---
+Body: the exact commands the model should run.
+```
+
+Commands in the body use the **`$SKILL_DIR` convention** — an absolute tool path, with the user's
+project as the workspace:
+
+```bash
+python3 "$SKILL_DIR/tools/my_tool.py" --image <path/to/image> --workspace "$PWD"
+```
+
+State in the body that `$SKILL_DIR` is the directory containing that `SKILL.md`. A bare relative path
+(`python3 tools/my_tool.py`) **fails**: the model runs commands from the user's project, where `tools/`
+does not exist.
+
 ### `spec-augmentation-v1` — the pulled artifact
 
 Three partitions, three authority rules:
@@ -1174,7 +1246,8 @@ Every accepted change is attributed to the provider and version that proposed it
 | location | `<workspace>/.img2/state.json` |
 | shape | `{version, workspace, plugins: {"<id>": {…}}}` — one subtree per plugin |
 | mutation | **only** `img2_core.state.update_plugin_state(workspace, plugin_id, fn)`, which holds the lock across the whole read-modify-write |
-| cross-plugin | files in `<workspace>/.img2/artifacts/` with declared `kind` identifiers — never shared mutable state |
+| your outputs | `<workspace>/.img2/artifacts/<plugin-id>/` — a per-plugin subdirectory, so two plugins cannot collide |
+| cross-plugin | files under `<workspace>/.img2/artifacts/` with declared `kind` identifiers — never shared mutable state |
 | `--workspace` | tools take it, defaulting to cwd — **never** the skill or checkout root |
 
 A separate load → mutate → save with the lock held only at save is a lost-update bug, and the contract
@@ -1200,6 +1273,12 @@ names it as one. The base pipeline must not write this file at all.
 | two plugins declare the same typed edge | resolution refuses; never broken by install order |
 | several capabilities in one plugin | WARN naming the plugin and its count — not an error |
 | import `forge.*` from plugin tools | static boundary grep fails |
+| a `requires` floor the installed harness does not meet | **blocks** at `img2 add` and `img2 sync` |
+| a `requires` range that is not `>=X.Y.Z` | does not parse |
+| a non-stdlib import in `tools/` on the probe or test path | `doctor` FAILs |
+| `Path(__file__).parents[N]` root computation | `doctor` FAILs |
+| importing another plugin, or a harness internal beyond `img2_core` | `doctor` FAILs |
+| gate envelope `status` disagreeing with the exit code | downgraded to `error` |
 | `assessmentPatch` sets `objectClass.domain` | merge refuses |
 | `qualityFloors` lowers a floor | clamped to the base value, attempt recorded |
 | `specSections` carries a `BASE_OWNED` key | merge refuses, naming the key |

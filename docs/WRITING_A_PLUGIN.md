@@ -5,6 +5,12 @@ exercises every surface of the contract. This guide explains what each piece is 
 The contract (`docs/PLUGIN_CONTRACT.md`) is normative; where this guide and the contract
 disagree, the contract wins.
 
+This is the linear path through a **first** plugin. It deliberately does not repeat the field-by-field
+rules — those live once, in [`plugin-wiki/04-reference.md`](plugin-wiki/04-reference.md), so they cannot
+drift between two documents. Once you have a plugin working, [`plugin-wiki/`](plugin-wiki/README.md)
+covers what this guide does not: adding a whole domain, placing a step relative to a base pipeline
+step, and what to do when you want to override a gate.
+
 ## 0. Prerequisites
 
 ```bash
@@ -39,10 +45,9 @@ steps.json         # workflow steps you contribute (optional)
 }
 ```
 
-- `name` (`[a-z][a-z0-9-]*`) becomes the registry id and the host link suffix
-  (`~/.claude/skills/img2-<name>`). You do not choose the link name.
-- `requires` mismatches BLOCK at `img2 add`/`sync` — pick honest floors.
-- Only `>=X.Y.Z` ranges are supported. Nothing else parses.
+Two things that catch people: `name` also becomes the host link suffix, so you do not choose the
+link name; and a `requires` floor the installed harness does not meet **blocks** the install rather
+than warning. Field-by-field: [`plugin-wiki/04-reference.md`](plugin-wiki/04-reference.md#pluginjson--the-only-required-file).
 
 ## 3. SKILL.md
 
@@ -104,10 +109,12 @@ A gate prints ONE verdict envelope on stdout and exits 0 (pass) / 1 (fail) / 2 (
   "status": "pass", "reasons": [], "evidence": {} }
 ```
 
-Envelope status and exit code must agree — disagreement is downgraded to `error`.
-Only `{workspace}` and `{plugin_dir}` are substituted; anything else in the command is
-literal. Test through the real runner:
+Test through the real runner, never by calling your tool directly:
 `python3 -m img2_core.gate_runner --plugin-dir <your repo> --workspace <tmp>`.
+
+The envelope rules — status and exit code must agree, `reasons` non-empty when not `pass`, a malformed
+envelope is an `error` and not a pass — are in
+[`plugin-wiki/04-reference.md`](plugin-wiki/04-reference.md#gatesjson--blocking-verdicts).
 
 ## 6. Steps (steps.json)
 
@@ -117,6 +124,12 @@ literal. Test through the real runner:
 
 `after:` may reference another plugin's step id; the harness topo-sorts across all
 active plugins and refuses cycles/unknown refs at `img2 doctor`.
+
+`after` orders your steps against other *contributed* steps. It cannot place a step relative to a
+**base pipeline** step — that needs a domain profile's anchor, which is a different mechanism. Set
+`actor` explicitly on any row that is prose rather than a command. Both, plus the closed placeholder
+set: [`plugin-wiki/04-reference.md`](plugin-wiki/04-reference.md#stepsjson--contributed-steps-ordered-among-themselves)
+and [scenario 2](plugin-wiki/03-cookbook.md#scenario-2).
 
 ## 7. Tests
 

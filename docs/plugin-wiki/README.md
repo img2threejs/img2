@@ -6,7 +6,7 @@
 |---|---|
 | [01 — Why, and what changed](01-why.md) | you want the motivation, or you are worried something was taken away |
 | [02 — How it works](02-how-it-works.md) | you need the architecture: resolution, splicing, the merge, the boundaries |
-| [03 — Cookbook](03-cookbook.md) | **you are building something.** Ten worked scenarios, each with real files |
+| [03 — Cookbook](03-cookbook.md) | **you are building something.** Eleven worked scenarios, each with real files |
 | [04 — Reference](04-reference.md) | every field, every refusal, and the known gaps |
 
 `PLUGIN_CONTRACT.md` is normative. Where a wiki page and the contract disagree, the contract wins.
