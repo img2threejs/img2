@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -9,6 +10,22 @@ KIND_VERDICT = "img2.gate-verdict"
 KIND_RUN = "img2.gate-run"
 RUN_VERSION = 1
 EXPECTED_EXIT = {"pass": 0, "fail": 1, "error": 2}
+# Same default as the base socket's bounded runner (forge/stage3_build/emit_target.py); no shared
+# source across the two languages/repos, kept in sync by convention same as CONTRACT_REVISION.
+DEFAULT_GATE_TIMEOUT_SECONDS = 300
+
+
+def _computed_img2_home():
+    """Round-3 H1: an allowlist alone forwards IMG2_HOME only when the parent process already has
+    it, and the ordinary case is that it does not (the base commonly runs with it unset). Same
+    fallback convention every other reader in this ecosystem already uses (img2.mjs's
+    resolveImg2Home, the base's forge/_shared/domains/__init__.py and forge/_shared/targets.py):
+    default to ~/.img2. Deriving it instead from this file's own on-disk location was tried and
+    rejected -- it only holds when the harness was actually `img2 install`-ed into a directory
+    literally named `harness/`, and breaks the moment gate_runner.py is run directly from an
+    `img2-harness` source checkout (confirmed by reproducing round-3's own repro command against
+    a bare checkout: the derived path was one directory level off and the fix did not fix it)."""
+    return os.environ.get("IMG2_HOME") or str(Path.home() / ".img2")
 
 
 def load_gates(plugin_dir):
@@ -71,9 +88,10 @@ def parse_verdict(stdout):
     return status, reasons, doc
 
 
-def run_gates(plugin_dir, workspace):
+def run_gates(plugin_dir, workspace, gate_timeout=DEFAULT_GATE_TIMEOUT_SECONDS):
     plugin_dir = str(Path(plugin_dir).resolve())
     workspace = str(Path(workspace).resolve())
+    env = {**os.environ, "IMG2_HOME": _computed_img2_home()}
     ordered = topo_sort(load_gates(plugin_dir))
     results = []
     stopped = False
@@ -92,7 +110,7 @@ def run_gates(plugin_dir, workspace):
             for token in shlex.split(row["command"])
         ]
         try:
-            proc = subprocess.run(argv, cwd=workspace, capture_output=True, text=True)
+            proc = subprocess.run(argv, cwd=workspace, capture_output=True, text=True, timeout=gate_timeout, env=env)
         except (FileNotFoundError, PermissionError) as err:
             results.append({
                 "gate": row["id"],
@@ -100,6 +118,21 @@ def run_gates(plugin_dir, workspace):
                 "blocking": blocking,
                 "exitCode": None,
                 "reasons": ["could not spawn gate command: %s" % err],
+            })
+            if blocking:
+                stopped = True
+            continue
+        except subprocess.TimeoutExpired:
+            # Naming the gate is the whole point (round-3 H2): a hung gate is now caught HERE,
+            # inside the one process that will still print its aggregate envelope normally -- an
+            # outer kill of this whole runner is no longer the only way a hang ever ends, and it is
+            # no longer the only way "which gate hung" gets lost.
+            results.append({
+                "gate": row["id"],
+                "status": "error",
+                "blocking": blocking,
+                "exitCode": None,
+                "reasons": ["gate timed out after %ds" % gate_timeout],
             })
             if blocking:
                 stopped = True
@@ -132,9 +165,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m img2_core.gate_runner")
     parser.add_argument("--plugin-dir", required=True)
     parser.add_argument("--workspace", required=True)
+    parser.add_argument("--gate-timeout", type=int, default=DEFAULT_GATE_TIMEOUT_SECONDS,
+                         help="wall-clock seconds allowed per gate before it is killed and named (default %(default)s)")
     args = parser.parse_args(argv)
     try:
-        aggregate = run_gates(args.plugin_dir, args.workspace)
+        aggregate = run_gates(args.plugin_dir, args.workspace, gate_timeout=args.gate_timeout)
     except (ValueError, json.JSONDecodeError) as err:
         print(json.dumps({
             "kind": KIND_RUN,
