@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url'
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
 export const CORE_API = 1
+// The schema version of a step row's "provides" object (PLUGIN_CONTRACT.md §5's documented upgrade
+// path). Same discipline as MAX_PLUGIN_SCHEMA: a higher value is refused, never best-effort parsed --
+// a version nothing refuses on is decorative.
+export const MAX_PROVIDES_SCHEMA = 1
 // Asserted against the highest "## N." heading in docs/PLUGIN_CONTRACT.md by a test, so this
 // cannot silently drift from the document it advertises.
 export const CONTRACT_REVISION = 14
@@ -663,7 +667,7 @@ export function staticToolFindings(pluginDir, id, allIds) {
   return out
 }
 
-const ALLOWED_PLACEHOLDERS = new Set(['{plugin_dir}', '{workspace}', '{image}'])
+const ALLOWED_PLACEHOLDERS = new Set(['{plugin_dir}', '{workspace}', '{image}', '{spec}'])
 const SHELL_METACHAR_RE = /[;|&$`><()\n]/
 
 // Who carries out a row. Only a "program" row is handed back as argv; "agent" and "human" rows are
@@ -694,6 +698,23 @@ export function rowFinding(row, pluginDir, isGate = false) {
   return commandFinding(row.command, pluginDir, row.actor || 'program')
 }
 
+// Split out so a caller can apply metacharacter hardening without the executable-form (argv0) rule --
+// exactly the "instruction row" case: a row nothing ever execs as argv still needs its placeholders
+// and metacharacters checked, per plugin-declaration-validation's "one rule keyed on execution
+// semantics" requirement, but not a leading-token/interpreter check that presumes something runs it.
+// `placeholders` defaults to the harness-side vocabulary (steps.json/gates.json); a caller whose
+// declaration file has its own closed set (domain.json) passes that set instead, so a placeholder
+// legal only in the OTHER vocabulary is not mistaken for literal text a metacharacter could hide in.
+export function shellMetacharFinding(command, placeholders = ALLOWED_PLACEHOLDERS) {
+  let stripped = command
+  for (const p of placeholders) stripped = stripped.replaceAll(p, '')
+  const metachars = stripped.match(new RegExp(SHELL_METACHAR_RE, 'g'))
+  if (metachars) {
+    return 'command contains shell metacharacter(s) ' + [...new Set(metachars)].join(' ') + '; commands run without a shell and must not need one'
+  }
+  return null
+}
+
 export function commandFinding(command, pluginDir, actor = 'program') {
   if (typeof command !== 'string' || !command.trim()) return 'empty "command"'
 
@@ -701,7 +722,7 @@ export function commandFinding(command, pluginDir, actor = 'program') {
   let brace
   while ((brace = bracePattern.exec(command))) {
     if (!ALLOWED_PLACEHOLDERS.has(brace[0])) {
-      return 'command uses unrecognised placeholder ' + brace[0] + '; only {plugin_dir}, {workspace} and {image} are permitted'
+      return 'command uses unrecognised placeholder ' + brace[0] + '; only {plugin_dir}, {workspace}, {image} and {spec} are permitted'
     }
   }
 
@@ -710,15 +731,14 @@ export function commandFinding(command, pluginDir, actor = 'program') {
     return 'command uses angle-bracket pseudo-placeholder ' + angle[0] + '; a shell would read this as redirection, not a placeholder'
   }
 
-  // Everything below concerns executing the command. A row carried out by the agent or a human is
-  // never executed, so prose is legal there -- including the punctuation a shell would choke on.
+  // Everything below concerns executing the command as argv. A row carried out by the agent or a
+  // human is never executed that way, so the leading-token/interpreter rule does not apply there --
+  // this preserves the existing steps.json "actor": "agent" carve-out (which also skips metachar
+  // hardening today; a pre-existing behaviour this rework does not change -- see the report).
   if (actor !== 'program') return null
 
-  const stripped = command.replaceAll('{plugin_dir}', '').replaceAll('{workspace}', '').replaceAll('{image}', '')
-  const metachars = stripped.match(new RegExp(SHELL_METACHAR_RE, 'g'))
-  if (metachars) {
-    return 'command contains shell metacharacter(s) ' + [...new Set(metachars)].join(' ') + '; commands run without a shell and must not need one'
-  }
+  const metaBad = shellMetacharFinding(command)
+  if (metaBad) return metaBad
 
   const argv0 = (shlexSplit(command)[0] || '').replaceAll('{plugin_dir}', pluginDir)
   if (argv0.includes(path.sep)) {
@@ -734,7 +754,7 @@ export function commandFinding(command, pluginDir, actor = 'program') {
   }
 
   for (const token of command.split(/\s+/).filter(Boolean)) {
-    if (token.includes('{workspace}') || token.includes('{image}')) continue
+    if (token.includes('{workspace}') || token.includes('{image}') || token.includes('{spec}')) continue
     const sub = token.replaceAll('{plugin_dir}', pluginDir)
     if (!/\.(py|mjs|js|sh)$/.test(sub)) continue
     const p = path.isAbsolute(sub) ? sub : path.join(pluginDir, sub)
@@ -786,6 +806,246 @@ export function stepArgv(command, pluginDir) {
 
 function gateRunnerArgv(H, dir) {
   return ['python3', path.join(harnessDir(H), 'img2_core', 'gate_runner.py'), '--plugin-dir', dir, '--workspace', '{workspace}']
+}
+
+// ---------------------------------------------------------------- provides (emission target contract)
+
+// A declared artifact path must resolve under this plugin's own subtree of the workspace artifacts
+// area -- never escape it via an absolute path or a ".." segment, and never land in another plugin's
+// subtree. Checked here (statically, at doctor) and again at runtime by the socket that writes the
+// file (PLUGIN_CONTRACT.md's "provides.artifact.path" rule).
+export function artifactPathEscapes(declaredPath, pluginId) {
+  if (typeof declaredPath !== 'string' || !declaredPath) return true
+  if (path.isAbsolute(declaredPath) || declaredPath.startsWith('~')) return true
+  const prefix = path.posix.join('.img2', 'artifacts', pluginId) + '/'
+  const normalized = path.posix.normalize(declaredPath)
+  if (normalized === '..' || normalized.startsWith('../')) return true
+  return !normalized.startsWith(prefix)
+}
+
+// Validates a step row's "provides" object in isolation -- schema shape and the artifact-path escape
+// rule. Cross-plugin consistency (manifest edge <-> step, duplicate providers, terminal ordering) needs
+// the full registry and is checked only by `cmdDoctor`, which has it; this is the part `capabilities`
+// (via `unsafeRowFinding`) can and must also check so the two never disagree on a malformed row.
+export function providesFinding(provides, pluginId) {
+  if (!provides || typeof provides !== 'object' || Array.isArray(provides)) return '"provides" must be an object'
+  if (!Number.isInteger(provides.version) || provides.version < 1) return '"provides.version" must be an integer >= 1'
+  if (provides.version > MAX_PROVIDES_SCHEMA) {
+    return 'provides.version ' + provides.version + ' is newer than this harness reads (MAX_PROVIDES_SCHEMA=' + MAX_PROVIDES_SCHEMA + ')'
+  }
+  if (typeof provides.from !== 'string' || !provides.from) return '"provides.from" must be a non-empty string'
+  if (typeof provides.to !== 'string' || !provides.to) return '"provides.to" must be a non-empty string'
+  const artifact = provides.artifact
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return '"provides.artifact" must be an object'
+  if (typeof artifact.kind !== 'string' || !artifact.kind) return '"provides.artifact.kind" must be a non-empty string'
+  if (typeof artifact.path !== 'string' || !artifact.path) return '"provides.artifact.path" must be a non-empty string'
+  if (artifactPathEscapes(artifact.path, pluginId)) {
+    return (
+      '"provides.artifact.path" ' +
+      JSON.stringify(artifact.path) +
+      ' must resolve under .img2/artifacts/' +
+      pluginId +
+      '/'
+    )
+  }
+  return null
+}
+
+// Mirrors forge/_shared/targets.py's _plugin_targets() exactly -- the base's own authority for these
+// two fields, since it is the base that actually resolves and invokes a target. Read directly before
+// writing this (2026-08-31): `deterministic` is required as a boolean sibling of `provides` on the
+// step row (D7), never nested inside it; `timeoutSeconds` is optional, and when present must be a
+// positive integer. Scoped to actual target-providing steps (provides.from === "sculpt-spec") because
+// that is exactly targets.py's own scope -- a provides row for any other edge is never resolved as a
+// target, so the base never looks at these siblings for it either, and doctor should not invent a
+// stricter rule than the base actually enforces.
+export function targetSiblingFinding(step) {
+  if (typeof step.deterministic !== 'boolean') {
+    return '"deterministic" must be declared as a boolean beside "provides" (D7)'
+  }
+  if (step.timeoutSeconds !== undefined && step.timeoutSeconds !== null) {
+    if (!Number.isInteger(step.timeoutSeconds) || step.timeoutSeconds <= 0) {
+      return '"timeoutSeconds" must be a positive integer'
+    }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------- domain.json / spec_search_profile.json
+
+// Mirrors forge/_shared/domains/__init__.py's `_ALLOWED` exactly -- an unknown key there is a base
+// refusal (DomainRegistryError), so it must be a harness refusal too, or a typo'd key would pass
+// `doctor` clean and only fail once the base actually loads it.
+const DOMAIN_JSON_ALLOWED_KEYS = new Set(['id', 'setupSteps', 'setupAnchorBefore', 'passSteps', 'passAnchorBefore', 'specCollection'])
+
+// `domain.json` steps arrive as `[stepId, command]` pairs (not `{id, command}` rows) and carry no
+// `actor` field -- the base splices them straight into a checklist (forge/_shared/domains/__init__.py,
+// workflow_state.py), never executing them as argv. So every row here needs classifying by its OWN
+// leading token, the same way steps.json's actor field would classify it if the schema had one:
+// a path form or a known interpreter (the same `INTERPRETERS` set the argv0 rule recognises) names a
+// COMMAND ROW -- something a real caller (the plugin's own tool, invoked by the base or by hand) runs,
+// so shell-metacharacter hardening applies; anything else is a PROSE INSTRUCTION ROW nothing ever execs
+// as argv, so metacharacters in it are just English punctuation, not a shell hazard. The executable-
+// form (argv0) rule itself never applies to EITHER kind here -- domain.json has no actor key to let a
+// command row declare itself executable the way a steps.json "program" row does, so there is no
+// "bare word resolves to an unrelated program" hazard this file's schema can even express, and no
+// message here may suggest `"actor": "agent"` as the fix. The house's own documented domain profile
+// (plugin-wiki's interiors cookbook, `docs/plugin-wiki/03-cookbook.md:78-81`) ships exactly this mix:
+// two prose setupSteps (one with parentheses -- a shell metacharacter) and two python3-led ones. A
+// metachar rule applied to every row, or an argv0 rule applied to any row, would each invalidate that
+// published example one way or the other.
+//
+// domain.json's placeholder vocabulary is NOT the harness's steps.json/gates.json set -- it is its own
+// two consumers' set, verified directly: `{plugin_dir}` is resolved by a plain string `.replace()` at
+// splice time (domains/__init__.py:137-141), and `{reference}`, `{spec}`, `{pass_id}` are resolved by
+// Python `str.format()` at render time (workflow_state.py:239-243, `_format_command`). `.format()`
+// raises `KeyError` on any other `{...}` name, including the harness's own `{workspace}`/`{image}` --
+// so a domain.json command using either of those would crash at runtime, not just fail doctor.
+const DOMAIN_JSON_ALLOWED_PLACEHOLDERS = new Set(['{plugin_dir}', '{reference}', '{spec}', '{pass_id}'])
+
+// A path form (contains a path separator once {plugin_dir} is resolved) or a known interpreter marks a
+// row a caller actually runs; anything else is prose. No file-existence check here (unlike commandFinding's
+// program-row check) -- classification only decides whether metachar hardening applies, not whether the
+// row is safe to execute, since nothing here is ever handed back as argv for a caller to execute.
+function isDomainCommandRow(command, pluginDir) {
+  const leading = (shlexSplit(command)[0] || '').replaceAll('{plugin_dir}', pluginDir)
+  return leading.includes(path.sep) || INTERPRETERS.has(leading)
+}
+
+function domainPlaceholderFinding(command) {
+  const bracePattern = /\{[^{}]*\}/g
+  let brace
+  while ((brace = bracePattern.exec(command))) {
+    if (!DOMAIN_JSON_ALLOWED_PLACEHOLDERS.has(brace[0])) {
+      return (
+        'command uses unrecognised placeholder ' +
+        brace[0] +
+        '; only {plugin_dir}, {reference}, {spec} and {pass_id} are permitted in domain.json (its own ' +
+        'vocabulary, resolved by forge/_shared/domains/__init__.py and workflow_state.py -- not the ' +
+        'harness steps.json/gates.json set)'
+      )
+    }
+  }
+  const angle = /<[^<>\n]*>/.exec(command)
+  if (angle) {
+    return 'command uses angle-bracket pseudo-placeholder ' + angle[0] + '; a shell would read this as redirection, not a placeholder'
+  }
+  return null
+}
+
+export function domainJsonFindings(dir, pluginId) {
+  const out = []
+  let raw
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(dir, 'domain.json'), 'utf8'))
+  } catch (e) {
+    return ['domain.json is not valid JSON: ' + e.message]
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return ['domain.json must be a JSON object']
+  const unknown = Object.keys(raw).filter((k) => !DOMAIN_JSON_ALLOWED_KEYS.has(k))
+  if (unknown.length) out.push('domain.json has unknown key(s): ' + unknown.join(', '))
+  if (typeof raw.id !== 'string' || !raw.id) out.push('domain.json: "id" must be a non-empty string')
+
+  const checkSteps = (key, anchorKey) => {
+    const steps = raw[key]
+    if (steps === undefined) return
+    if (!Array.isArray(steps)) {
+      out.push('domain.json: "' + key + '" must be an array')
+      return
+    }
+    for (const entry of steps) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || !entry[0] || typeof entry[1] !== 'string' || !entry[1]) {
+        out.push('domain.json: "' + key + '" entries must be [stepId, command] pairs of non-empty strings')
+        continue
+      }
+      const [stepId, command] = entry
+      // domain.json's own placeholder set (not the harness's); metachar hardening only on command rows
+      // (a path form or known interpreter leads them); never the argv0 rule -- see the comment above.
+      const bad =
+        domainPlaceholderFinding(command) ||
+        (isDomainCommandRow(command, dir) ? shellMetacharFinding(command, DOMAIN_JSON_ALLOWED_PLACEHOLDERS) : null)
+      if (bad) out.push('domain.json "' + stepId + '": ' + bad)
+    }
+    if (steps.length && (typeof raw[anchorKey] !== 'string' || !raw[anchorKey])) {
+      out.push('domain.json: "' + key + '" is non-empty but "' + anchorKey + '" is missing')
+    }
+  }
+  checkSteps('setupSteps', 'setupAnchorBefore')
+  checkSteps('passSteps', 'passAnchorBefore')
+  if ('specCollection' in raw && (typeof raw.specCollection !== 'string' || !raw.specCollection)) {
+    out.push('domain.json: "specCollection" must be a non-empty string')
+  }
+  return out
+}
+
+// A `spec_search_profile.json` path resolves against the contributing plugin's own directory
+// (forge/_shared/spec_search.py's `content_root`), never the workspace -- so containment is judged
+// against the plugin dir, not `.img2/artifacts/<plugin-id>/` as `provides.artifact.path` is.
+function pathEscapesPluginDir(p) {
+  if (typeof p !== 'string' || !p) return true
+  if (path.isAbsolute(p) || p.startsWith('~')) return true
+  const normalized = path.posix.normalize(p)
+  return normalized === '..' || normalized.startsWith('../')
+}
+
+export function specSearchProfileFindings(dir, pluginId) {
+  const out = []
+  let raw
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(dir, 'spec_search_profile.json'), 'utf8'))
+  } catch (e) {
+    return ['spec_search_profile.json is not valid JSON: ' + e.message]
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return ['spec_search_profile.json must be a JSON object']
+  const collections = raw.collections
+  if (!collections || typeof collections !== 'object' || Array.isArray(collections)) {
+    return ['spec_search_profile.json: "collections" must be an object']
+  }
+
+  const checkPathList = (colName, field, value) => {
+    if (value === undefined) return
+    if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || !v)) {
+      out.push('spec_search_profile.json: collections.' + colName + '.' + field + ' must be an array of non-empty strings')
+      return
+    }
+    for (const p of value) {
+      if (pathEscapesPluginDir(p)) {
+        out.push('spec_search_profile.json: collections.' + colName + '.' + field + ' path ' + JSON.stringify(p) + ' must stay inside the plugin directory')
+      }
+    }
+  }
+  const checkPath = (colName, field, value) => {
+    if (value === undefined) return
+    if (typeof value !== 'string' || !value) {
+      out.push('spec_search_profile.json: collections.' + colName + '.' + field + ' must be a non-empty string')
+    } else if (pathEscapesPluginDir(value)) {
+      out.push('spec_search_profile.json: collections.' + colName + '.' + field + ' path ' + JSON.stringify(value) + ' must stay inside the plugin directory')
+    }
+  }
+
+  for (const [colName, col] of Object.entries(collections)) {
+    if (!col || typeof col !== 'object' || Array.isArray(col)) {
+      out.push('spec_search_profile.json: collections.' + colName + ' must be an object')
+      continue
+    }
+    checkPathList(colName, 'source_roots', col.source_roots)
+    checkPathList(colName, 'optional_source_roots', col.optional_source_roots)
+    checkPathList(colName, 'distilled_records', col.distilled_records)
+    checkPath(colName, 'documentation', col.documentation)
+    checkPath(colName, 'cache', col.cache)
+    if (col.term_aliases !== undefined) {
+      if (!col.term_aliases || typeof col.term_aliases !== 'object' || Array.isArray(col.term_aliases)) {
+        out.push('spec_search_profile.json: collections.' + colName + '.term_aliases must be an object')
+      } else {
+        for (const [term, aliases] of Object.entries(col.term_aliases)) {
+          if (!Array.isArray(aliases) || aliases.some((a) => typeof a !== 'string' || !a)) {
+            out.push('spec_search_profile.json: collections.' + colName + '.term_aliases.' + term + ' must be an array of non-empty strings')
+          }
+        }
+      }
+    }
+  }
+  return out
 }
 
 // ---------------------------------------------------------------- prompts
@@ -1107,6 +1367,10 @@ async function cmdDoctor(opts) {
     const seen = new Set()
     const allIds = reg.plugins.map((r) => r.id)
     const allSteps = []
+    // Every step across every plugin that carries a valid `provides` -- collected here so the
+    // terminal-ordering check (which needs the fully merged `after` graph) can run once, after every
+    // plugin's own steps.json has been read.
+    const allProvidingSteps = []
     for (const row of reg.plugins) {
       if (seen.has(row.id)) {
         err(row.id, 'duplicate registry row')
@@ -1172,7 +1436,27 @@ async function cmdDoctor(opts) {
           err(row.id, e.message)
         }
       }
+      const domainFile = path.join(dir, 'domain.json')
+      if (fs.existsSync(domainFile)) {
+        try {
+          for (const finding of domainJsonFindings(dir, row.id)) err(row.id, finding)
+        } catch (e) {
+          err(row.id, 'domain.json: ' + e.message)
+        }
+      }
+      const specSearchProfileFile = path.join(dir, 'spec_search_profile.json')
+      if (fs.existsSync(specSearchProfileFile)) {
+        try {
+          for (const finding of specSearchProfileFindings(dir, row.id)) err(row.id, finding)
+        } catch (e) {
+          err(row.id, 'spec_search_profile.json: ' + e.message)
+        }
+      }
+
       const stepsFile = path.join(dir, 'steps.json')
+      // provides.{from,to} declared by this plugin's own steps -- gathered while reading steps.json so
+      // the manifest<->step cross-validation below (scoped to this one plugin) can run right after.
+      const providesByPlugin = []
       if (fs.existsSync(stepsFile)) {
         try {
           const rows = readRowsFile(stepsFile)
@@ -1180,10 +1464,53 @@ async function cmdDoctor(opts) {
             if (typeof s.title !== 'string' || !s.title) err(row.id, 'steps.json: "' + (s.id || '?') + '" needs a string "title"')
             const bad = rowFinding(s, dir, false)
             if (bad) err(row.id, 'steps.json "' + (s.id || '?') + '": ' + bad)
+            if ('provides' in s) {
+              const pbad = providesFinding(s.provides, row.id)
+              if (pbad) err(row.id, 'steps.json "' + (s.id || '?') + '" provides: ' + pbad)
+              else {
+                if (s.provides.from === 'sculpt-spec') {
+                  const tbad = targetSiblingFinding(s)
+                  if (tbad) err(row.id, 'steps.json "' + (s.id || '?') + '": ' + tbad)
+                }
+                providesByPlugin.push({ stepId: s.id, from: s.provides.from, to: s.provides.to })
+                allProvidingSteps.push({ pluginId: row.id, stepId: s.id })
+              }
+            }
             allSteps.push(s)
           }
         } catch (e) {
           err(row.id, e.message)
+        }
+      }
+
+      // Manifest <-> step cross-validation (emission-target-contract §D1). A "target edge" is a
+      // manifest capability whose "from" is "sculpt-spec" -- the terminal, whole-artifact transform
+      // this contract governs; every other capability edge (e.g. "image" -> ...) is an ordinary domain
+      // capability, untouched by `provides` and unaffected by this check, which is why every shipped
+      // plugin today (none declares "sculpt-spec" or "provides") sees zero doctor change here.
+      if (manifest) {
+        for (const cap of manifest.capabilities) {
+          if (cap.from !== 'sculpt-spec') continue
+          const hasStep = providesByPlugin.some((p) => p.from === cap.from && p.to === cap.to)
+          if (!hasStep) {
+            err(row.id, 'manifest capability ' + cap.from + ' -> ' + cap.to + ' has no providing step in steps.json')
+          }
+        }
+        for (const p of providesByPlugin) {
+          const hasEdge = manifest.capabilities.some((cap) => cap.from === p.from && cap.to === p.to)
+          if (!hasEdge) {
+            err(row.id, 'steps.json "' + p.stepId + '" provides ' + p.from + ' -> ' + p.to + ' but no manifest capability edge declares it')
+          }
+        }
+        const byTo = new Map()
+        for (const p of providesByPlugin) {
+          if (!byTo.has(p.to)) byTo.set(p.to, [])
+          byTo.get(p.to).push(p.stepId)
+        }
+        for (const [to, ids] of byTo) {
+          if (ids.length > 1) {
+            err(row.id, 'two steps provide kind "' + to + '": ' + ids.join(', ') + ' -- a kind must have exactly one providing step per plugin')
+          }
         }
       }
     }
@@ -1192,6 +1519,17 @@ async function cmdDoctor(opts) {
       topoSort(allSteps, 'steps (all plugins)')
     } catch (e) {
       err(null, e.message)
+    }
+
+    // A providing step must be terminal: nothing else in the merged step graph -- from any plugin --
+    // may run after it (emission-target-contract: "a providing step ordered after a non-terminal step
+    // is refused"). Runs regardless of whether topoSort above found a cycle: a cycle is reported on its
+    // own, and this check still names any concrete non-terminal provider it can see.
+    for (const entry of allProvidingSteps) {
+      const dependents = allSteps.filter((s) => Array.isArray(s.after) && s.after.includes(entry.stepId)).map((s) => s.id)
+      if (dependents.length) {
+        err(entry.pluginId, 'steps.json "' + entry.stepId + '" provides an artifact but is not terminal -- ' + dependents.join(', ') + ' run(s) after it')
+      }
     }
 
     const byEdge = new Map()
@@ -1276,7 +1614,16 @@ function rawCapabilitiesClaim(manifestPath, from, to) {
 
 // One source of truth for "is this plugin's declared work safe to hand to a caller". Doctor reports
 // it as a finding; the query refuses on it. Both call commandFinding so they cannot drift apart.
+//
+// A malformed `provides` shape (bad version, missing artifact fields, an escaping artifact path) is
+// checked here too, for the same reason: an artifact-path escape is a write-location safety issue, not
+// merely a data-integrity one, so `capabilities` must refuse it exactly as `doctor` does. The
+// manifest<->step cross-validation (edge-no-step, step-no-edge, duplicate providers, terminal
+// ordering) is NOT re-derived here -- it needs the full registry and every plugin's steps, which
+// `cmdDoctor` alone has; a plugin failing only one of those checks may still answer other edges via
+// `capabilities` unaffected by this narrower gate. Recorded as a known scope limit, not a drift.
 export function unsafeRowFinding(dir) {
+  const pluginId = path.basename(dir)
   for (const name of ['steps.json', 'gates.json']) {
     const file = path.join(dir, name)
     if (!fs.existsSync(file)) continue
@@ -1289,6 +1636,14 @@ export function unsafeRowFinding(dir) {
     for (const r of rows) {
       const bad = rowFinding(r, dir, name === 'gates.json')
       if (bad) return { file, reason: name + ' "' + (r && r.id) + '": ' + bad }
+      if (name === 'steps.json' && r && 'provides' in r) {
+        const pbad = providesFinding(r.provides, pluginId)
+        if (pbad) return { file, reason: name + ' "' + r.id + '" provides: ' + pbad }
+        if (r.provides.from === 'sculpt-spec') {
+          const tbad = targetSiblingFinding(r)
+          if (tbad) return { file, reason: name + ' "' + r.id + '": ' + tbad }
+        }
+      }
     }
   }
   return null
@@ -1302,11 +1657,17 @@ function buildProviderRow(H, dir, row, manifest) {
     // caller to execute, so there is nothing for it to execute by accident.
     steps = topoSort(readRowsFile(stepsFile), row.id + '/steps.json').map((s) => {
       const actor = s.actor || 'program'
-      if (actor === 'program') return { id: s.id, actor, argv: stepArgv(s.command, dir) }
-      // {plugin_dir} is resolved for an instruction too. A reader cannot expand it -- handing back
-      // "Read {plugin_dir}/grimoire/..." tells an agent to read a path that does not exist.
-      // {workspace} and {image} are deliberately left for the caller to fill by value, as in argv.
-      return { id: s.id, actor, instruction: s.command.replaceAll('{plugin_dir}', dir) }
+      const out =
+        actor === 'program'
+          ? { id: s.id, actor, argv: stepArgv(s.command, dir) }
+          : // {plugin_dir} is resolved for an instruction too. A reader cannot expand it -- handing back
+            // "Read {plugin_dir}/grimoire/..." tells an agent to read a path that does not exist.
+            // {workspace} and {image} are deliberately left for the caller to fill by value, as in argv.
+            { id: s.id, actor, instruction: s.command.replaceAll('{plugin_dir}', dir) }
+      // Surfaced verbatim (no placeholder in provides.artifact.path to resolve): a caller resolving a
+      // target edge needs the artifact kind and its workspace-relative path, not just that a step exists.
+      if (s.provides) out.provides = s.provides
+      return out
     })
   }
   const gatesFile = path.join(dir, 'gates.json')

@@ -187,12 +187,12 @@ test('commandFinding fails on an angle-bracket pseudo-placeholder', () => {
   assert.match(bad, /<image>/)
 })
 
-test('commandFinding passes a command using only the three permitted placeholders', () => {
+test('commandFinding passes a command using only the four permitted placeholders', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'img2-cmdfinding-'))
   try {
     fs.mkdirSync(path.join(dir, 'tools'))
     fs.writeFileSync(path.join(dir, 'tools', 'x.py'), 'print("ok")\n')
-    const command = 'python3 {plugin_dir}/tools/x.py --workspace {workspace} --image {image}'
+    const command = 'python3 {plugin_dir}/tools/x.py --workspace {workspace} --image {image} --spec {spec}'
     assert.equal(commandFinding(command, dir), null)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
@@ -220,9 +220,21 @@ test('shlexSplit tokenises like shlex, honouring quotes', () => {
   assert.deepEqual(shlexSplit('cmd --title "hello world" --flag'), ['cmd', '--title', 'hello world', '--flag'])
 })
 
-test('stepArgv substitutes {plugin_dir} per token and leaves {workspace}/{image} untouched', () => {
-  const argv = stepArgv('python3 {plugin_dir}/tools/x.py --workspace {workspace} --image {image}', '/plugins/x')
-  assert.deepEqual(argv, ['python3', '/plugins/x/tools/x.py', '--workspace', '{workspace}', '--image', '{image}'])
+test('stepArgv substitutes {plugin_dir} per token and leaves {workspace}/{image}/{spec} untouched', () => {
+  const argv = stepArgv(
+    'python3 {plugin_dir}/tools/x.py --workspace {workspace} --image {image} --spec {spec}',
+    '/plugins/x',
+  )
+  assert.deepEqual(argv, [
+    'python3',
+    '/plugins/x/tools/x.py',
+    '--workspace',
+    '{workspace}',
+    '--image',
+    '{image}',
+    '--spec',
+    '{spec}',
+  ])
 })
 
 test('launcherCandidates returns only known bins that are on PATH, in preference order', async () => {

