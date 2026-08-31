@@ -125,6 +125,7 @@ graph LR
         P3["gates.json<br/>gate rows"]
         P4["domain.json<br/>domain profile + anchors"]
         P5["spec_search_profile.json<br/>evidence corpus"]
+        P10["provides + deterministic<br/>on a steps.json row"]
     end
 
     subgraph runtime["Runtime — files, never shared mutable state"]
@@ -140,13 +141,14 @@ graph LR
     subgraph frame["Where the frame reads it"]
         F1["capability resolution"]
         F2["step topo-sort"]
-        F3["gate_runner, blocking verdicts"]
+        F3["gate_runner, blocking verdicts<br/>LIVE via plugin-gates"]
         F4["domain registry, 2 sources"]
         F5["spec search with content_root"]
         F6["spec authoring — base PULLS"]
         F7["another plugin reads it"]
         F8["img2_core.state, locked"]
         F9["steps with actor: agent"]
+        F10["target resolution --<br/>--target only, never by install"]
     end
 
     P1 --> F1
@@ -158,6 +160,7 @@ graph LR
     P7 --> F7
     P8 --> F8
     P9 --> F9
+    P10 --> F10
 ```
 
 The **domain registry** has exactly two sources: in-repo modules, and installed plugins' `domain.json`
@@ -188,22 +191,58 @@ The two paths that produce output differ in **exactness, not completeness**. Gen
 preserving that is on you: a plugin that makes the generic path stop working has broken the frame's
 first principle.
 
+### A fourth case, orthogonal to domain resolution: the explicitly-selected emission target
+
+The three cases above answer "how is the object built" — they are about domain resolution, and they
+happen once, during the sculpting pipeline. A **target** answers a completely different question,
+asked *after* the model already exists: "should this already-built model also be exported as some
+other file?" It is not a fourth branch of the `RESOLVE` decision above — it composes with any of the
+three. `GENERIC`, `DOMAIN` and `MISS` all still apply to how the TypeScript gets built; a target
+selection is an independent axis, applied at the terminal step, regardless of which of the three
+produced the model:
+
+```mermaid
+flowchart TD
+    OUT(["Procedural TypeScript<br/>(from any of GENERIC / DOMAIN / MISS's non-fail outcome)"]) --> SEL{"--target requested?"}
+    SEL -->|"no (the default)"| NOOP["No-op: writes nothing<br/>artifact of record = the TypeScript"]
+    SEL -->|"yes, kind installed"| RUN["Bounded subprocess:<br/>invoke, verify, provenance"]
+    SEL -->|"yes, kind absent or ambiguous"| FAIL["FAIL LOUD<br/>names the kind / all claimants"]
+
+    RUN --> ART(["Produced artifact<br/>+ provenance, never base-gated"])
+
+    classDef bad stroke:#c00,stroke-width:3px
+    class FAIL bad
+```
+
+Never inferred from installation, domain, filename or spec contents — only an explicit `--target
+<kind>` request selects one, and it runs at most once, only once the workspace's terminal readiness
+step is recorded. See [Scenario 12](03-cookbook.md#scenario-12).
+
 ## Where a plugin splices in
 
 ```mermaid
 flowchart LR
-    S1["Stage 1<br/>intake"] --> S2["Stage 2<br/>spec"] --> S3["Stage 3<br/>build"] --> S4["Stage 4<br/>review"] --> S5["Stage 5<br/>rig"]
+    S1["Stage 1<br/>intake"] --> S2["Stage 2<br/>spec"] --> S3["Stage 3<br/>build"] --> S4["Stage 4<br/>review"] --> S5["Stage 5<br/>rig"] --> S6["Final:<br/>emission target"] --> S7["Final:<br/>plugin-gates"]
 
     PS["setupSteps<br/>setupAnchorBefore"] -.->|"splice AT the anchor"| S1
     PS -.-> S2
     PP["passSteps<br/>passAnchorBefore"] -.->|"every correction pass"| S4
     PA["spec-augmentation"] -.->|base pulls| S2
     AH["admission.json<br/>probe.json"] -.->|"base publishes,<br/>plugin reads"| S1
+    TG["provides + deterministic<br/>on a steps.json row"] -.->|"--target only,<br/>never mid-pass"| S6
+    GT["gates.json"] -.->|"LIVE: two-clause<br/>participation rule"| S7
 ```
 
 Splicing inserts your steps **immediately before** the anchored base step. An anchor naming a base step
 that does not exist fails loud — the alternative, appending at the end, would put a setup step after the
-steps that depend on it. Step ids to anchor against are listed in
+steps that depend on it. The two terminal slots (`S6`, `S7`) are different: both are base-owned,
+appended unconditionally to the base's own final steps — no plugin splices into either the way
+`setupSteps`/`passSteps` splice earlier. `S6` runs only when an explicit `--target` is given; on the
+default no-target run it is still the checklist step the agent invokes, and its printed statement
+naming the artifact of record (`src/createObjectModel.ts`) is what marks that step done, the same way
+any other checklist step's own output is read as evidence of completion. `S7` (`plugin-gates`) runs
+right after it unconditionally, invoking every involved plugin's `gates.json` under the two-clause
+participation rule (Scenario 3, Scenario 12). Step ids to anchor against are listed in
 [the cookbook](03-cookbook.md#anchors).
 
 ## The augmentation merge, and every refusal
@@ -266,10 +305,14 @@ graph TB
     linkStyle 4,5,6,7 stroke:#c00,stroke-width:3px
 ```
 
-**Gap — the base-import prohibition is not in the contract yet.** The only `MUST NOT import` clause
-binds *plugin tools* and *`img2_core`*; none binds the base itself. The thick edge from `base` to
-`plugin` is the rule the architecture assumes and the document does not yet state. See
-[gaps](04-reference.md#gaps).
+**Closed — the base-import prohibition is now stated.** Until the emission target contract, the only
+`MUST NOT import` clause bound *plugin tools* and *`img2_core`*; none bound the base itself, even
+though the thick edge above is the rule the architecture has always assumed. `PLUGIN_CONTRACT.md` now
+states it normatively (currently under its DRAFT section, pending the coordinated `## 15.`/`## 16.`
+renumbering), alongside the permitted direction (a plugin may import a base helper the contract
+declares importable — `img2_core`, today) and the obligations that come with invoking a plugin as a
+subprocess (declared input, an env allowlist, untrusted output, bounded execution, no influence over a
+base quality check). See [gaps](04-reference.md#gaps).
 
 ## Workspace state — one file per owner
 

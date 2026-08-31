@@ -18,6 +18,7 @@ base pipeline's step ids are listed in [§ Anchors](#anchors) so you can point a
 | [9](#scenario-9) | hand data to another plugin | a declared-`kind` file in `artifacts/` |
 | [10](#scenario-10) | add a capability the frame has no opinion about | a typed edge + one step |
 | [11](#scenario-11) | develop locally / keep it private | `img2 add --link`, a private repo |
+| [12](#scenario-12) | declare an emission target — a whole-file export | `provides` + `deterministic` on a `steps.json` row, selected via `--target` |
 
 ---
 
@@ -286,8 +287,21 @@ Three rules that decide whether your gate is trustworthy:
   green. Do not add a `try/except` that swallows a failure and prints `pass`.
 - **`reasons` must be non-empty when `status` is not `pass`.** A refusal with no reason is unactionable.
 
-`blocking: true` stops the workflow. `blocking: false` records the verdict and continues — use it while
-you are still calibrating.
+`blocking: true` **stops the workflow — LIVE**, executed from the base's own checklist, not merely
+declared. `blocking: false` records the verdict and continues either way, so use it while you are still
+calibrating.
+
+**When the base runs them.** A `plugin-gates` step is the base's own `FINAL_STEPS` row (right after the
+emission-target step), invoked by the agent like any other checklist step:
+`python3 forge/stage3_build/run_gates.py --workspace .`. It runs every installed plugin's gates that
+are **involved** in the current workspace, under the two-clause participation rule: (i) you contributed
+a step to the resolved domain profile (your `domain.json`, owned by your own registry entry — derived
+from the registry layout, never assumed from a name match) and at least one of those steps is marked
+done; or (ii) you are the plugin recorded as the selected emission target (Scenario 12). A plugin that
+contributed no step to either runs no gates. A blocking failure from ANY involved plugin stops the
+whole `plugin-gates` run, naming the gate and the plugin that owns it. You can still exercise your own
+gates directly before shipping — `python3 -m img2_core.gate_runner --plugin-dir <your repo> --workspace
+<tmp>` — but a normal pipeline run now exercises them too.
 
 ---
 
@@ -472,10 +486,14 @@ Cross-plugin handoff is **files with declared `kind` identifiers** in `<workspac
 never shared mutable state.
 
 ```python
-# plugin A writes
+# plugin A writes -- under its OWN subdirectory, never bare in artifacts/
 artifact = {"kind": "interiors.room-envelope-v1", "version": 1, "rooms": [...]}
-(workspace / ".img2" / "artifacts" / "room-envelope.json").write_text(json.dumps(artifact))
+(workspace / ".img2" / "artifacts" / "interiors" / "room-envelope.json").write_text(json.dumps(artifact))
 ```
+
+That per-plugin subdirectory is not a style choice: `<workspace>/.img2/artifacts/<plugin-id>/` is the
+same containment rule an emission target's declared `provides.artifact.path` is held to (Scenario 12) —
+it is what keeps two plugins' outputs from colliding.
 
 ```python
 # plugin B reads — and checks the kind, because a file name is not a contract
@@ -528,6 +546,16 @@ Declare a typed edge that says what you convert:
 "capabilities": [{ "from": "threejs-factory", "to": "glb-asset" }]
 ```
 
+**This is not an emission target, and "runs whenever the plugin is active" does not describe one.** A
+`steps.json` capability like this one is invoked by whatever the frame's own steps do with it — here,
+an agent choosing to run the export tool because the plugin is installed and the edge exists. An
+emission target (Scenario 12) is a *different* thing wearing similar clothes: it is declared with a
+`provides` row whose `from` is `sculpt-spec`, and — regardless of installation — it never runs unless a
+user names it via `--target <kind>`. If your capability is "convert the object into another format,"
+ask which one you actually have: does it run because an agent decided to, given the edge exists (this
+scenario), or does it run only on an explicit `--target` request naming it, terminal and bounded
+(Scenario 12)? The two are not interchangeable, and the wiki has taught only the first shape until now.
+
 ---
 
 <a name="scenario-11"></a>
@@ -547,6 +575,138 @@ The harness **never runs your tests or imports your code** during `add`, `doctor
 is static. What `add` does give you is provenance: a pinned `resolvedSha`, a registry row, and a link
 under a harness-owned name. The contract is honest about the limit: *"it cannot make the code safe, only
 make what runs identifiable and reproducible."*
+
+---
+
+<a name="scenario-12"></a>
+## Scenario 12 — Declare an emission target: a whole-file export
+
+You want the frame's already-validated sculpt spec turned into a different produced file — a GLB, an
+FBX, or here, a minimal deterministic JSON echo of the spec's own shape. This is **not** a domain (you
+are not teaching the frame about a subject) and not an ordinary `steps.json` capability (Scenario 10):
+it never runs merely because you are installed. It runs once, terminally, and only when a user asks
+for it by name.
+
+### The repo — `plugin-sculpt-echo`, the in-tree fixture that proves this end to end
+
+```
+plugin-sculpt-echo/
+├── plugin.json          required — the discovery edge
+├── steps.json           the provides row: invocation + artifact
+├── gates.json           a blocking structure check on YOUR artifact
+├── SKILL.md
+└── tools/
+    ├── emit_echo.py      writes the artifact
+    └── gate_echo_structure.py
+```
+
+### `plugin.json` — discovery only
+
+```json
+{
+  "schema": 1,
+  "name": "sculpt-echo",
+  "version": "0.1.0",
+  "description": "Emission-target contract exerciser: echoes a validated sculpt spec's shape to a deterministic JSON artifact (sculpt-spec -> echo).",
+  "capabilities": [{ "from": "sculpt-spec", "to": "echo" }],
+  "requires": { "harness": ">=0.1.0", "coreApi": 1 }
+}
+```
+
+The `from` of `sculpt-spec` is what makes this a **target edge** rather than an ordinary capability —
+it names the frame's own validated-spec artifact kind as the source, which nothing but an emission
+target declares. The edge still serves discovery only, exactly as any other capability does; it is not
+itself an invocation surface.
+
+### `steps.json` — invocation and artifact, on the providing step
+
+```json
+[
+  {
+    "id": "emit-echo",
+    "title": "Echo the validated sculpt spec's shape to a deterministic artifact",
+    "actor": "program",
+    "command": "python3 {plugin_dir}/tools/emit_echo.py --spec {spec} --workspace {workspace}",
+    "after": [],
+    "provides": {
+      "version": 1,
+      "from": "sculpt-spec",
+      "to": "echo",
+      "artifact": { "kind": "echo", "path": ".img2/artifacts/sculpt-echo/echo.json" }
+    },
+    "deterministic": true
+  }
+]
+```
+
+Three things that are easy to get wrong on a first attempt, each cost real time when this fixture was
+authored from the wiki alone:
+
+- **`provides.artifact.path` is the FULL workspace-relative path, already prefixed with
+  `.img2/artifacts/<your-plugin-id>/`** — not a bare filename relative to that directory. Declaring
+  `"echo.json"` alone is refused: `doctor` names exactly what it must resolve under.
+- **`deterministic` and the optional `timeoutSeconds` are siblings of `provides` on the SAME row**, not
+  nested inside it. `deterministic` is required — `true` here, because a pure function of the spec's
+  own content is exactly what this fixture is.
+- **`{spec}` and `{workspace}` are left for the caller to fill by value**, same as any `steps.json`
+  command — this row is invoked by the base's own socket, never by an agent directly, so there is no
+  `{plugin_dir}`-only convenience path here the way a domain-contributed step sometimes has.
+
+### `gates.json` — your artifact gets your own gate, like any other capability
+
+```json
+[
+  { "id": "echo-structure", "command": "python3 {plugin_dir}/tools/gate_echo_structure.py --workspace {workspace}", "blocking": true, "after": [] }
+]
+```
+
+This runs under the same participation rule as any other gate (Scenario 3): whenever your providing
+step ran as the workspace's selected target. It checks *your own* artifact's shape — the base's own
+verification (existence, size, location, and container check where one exists) is separate and does
+not depend on your gate passing.
+
+### Selecting it
+
+```bash
+img2 add --link ./plugin-sculpt-echo
+img2 doctor                                    # zero findings
+img2 capabilities --from-kind sculpt-spec --to-kind echo --json   # resolves to sculpt-echo
+
+# from the base, once the workspace has reached action-ready:
+python3 forge/stage3_build/emit_target.py --spec object-sculpt-spec.json --workspace "$PWD" --target echo
+```
+
+Nothing here runs merely because the plugin is installed. With no `--target`, the export step is a
+no-op that writes nothing and names `src/createObjectModel.ts` as the artifact of record — installing
+`plugin-sculpt-echo` and never selecting `echo` changes not one byte of the default output.
+
+### What the base warrants, and what it does not
+
+The produced `echo.json` carries provenance — the spec's content hash, `sculpt-echo`'s own id, version
+and `resolvedSha`, the harness version, and the `deterministic: true` declaration (verified once per
+spec-and-revision, by double-invocation, then cached). The base verifies existence, size and location
+always, and the declared kind's container shape where a prober exists — `echo` has none, so it is
+accepted on existence/size/location alone, with the verification level stating plainly that kind
+verification was not performed. **No further base quality warranty applies.** `echo.json` is never
+reported under the completion vocabulary a gated TypeScript build uses — its own gate (`echo-structure`)
+is the only quality claim it carries, and that claim is `sculpt-echo`'s, not the base's.
+
+### Verify it before you trust it
+
+```bash
+img2 add --link ./plugin-sculpt-echo
+img2 doctor                                     # zero findings, or fix and repeat
+python3 -m unittest discover -s tests -p 'test_*.py'   # your suite, standalone
+
+# the round-trip that actually proves it, run from the base:
+img2 add --link ./plugin-sculpt-echo && img2 doctor && \
+  python3 forge/stage3_build/emit_target.py --spec <spec> --workspace "$PWD" --target echo
+git status --porcelain      # empty: installing and running a target changed no base file
+```
+
+That last line is not a formality — it is the mechanical form of "a v1.7 exporter installs, resolves,
+runs and is verified with zero base changes." A target plugin that leaves the base repo dirty has
+broken the one property this whole contract exists to prove.
 
 ---
 
@@ -583,8 +743,9 @@ Cases this cookbook does **not** cover, because there is no mechanism:
 | two plugins providing the same typed edge | refused as ambiguous, by design |
 | raise the correction-loop ceilings | not a plugin-settable value |
 | make the base import your code | forbidden; the base pulls artifacts instead |
-| a pass id outside the base's set | **accepted today, and it should not be** — see [gaps](04-reference.md#gaps) |
+| a pass id outside the base's set | ~~accepted today, and it should not be~~ **refused, closed** — see [gaps](04-reference.md#gaps) |
 
-That last row is a live bug, not a feature: a pass named outside the base's set silently loses its
-render, comparison and vision gate. Until it is fixed, do not name a pass outside the base's set — it
-will look like it works.
+That last row was a live bug, now closed: `VALID_PIPELINE_PASS_IDS` gained its first consumers, so a
+pass named outside the base's set is refused rather than silently accepted. The residual — a genuinely
+visual pass renamed to a legal-but-non-visual id still validates while dropping its visual gate — is
+deferred hygiene (`VISUAL_PASS_IDS`/`DEFAULT_PASS_ORDER` dedup), not a mechanism gap; see the gap entry.
