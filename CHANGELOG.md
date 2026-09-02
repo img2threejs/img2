@@ -9,10 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
-## [Unreleased]
+## [0.2.2] — 2026-09-02
 
 ### Added
 
+- **`gate_runner.py --gate-timeout`** and a per-gate child environment. Each gates.json row now runs
+  under its own timeout (default 300s) instead of hanging the whole run; a timed-out gate reports
+  `error` with the bound named. Shipped earlier under an unchanged 0.2.1, which meant a plugin could
+  not express `requires.harness` for it and an installed 0.2.1 harness silently lacked the flag —
+  this release exists so the feature is addressable by version.
+- `steps.json` `provides` rows and every declaration file a plugin ships are validated at doctor
+  time: schema/version bounds, artifact kind/path (confined under `.img2/artifacts/<plugin-id>/`),
+  and a `deterministic` boolean beside every `provides`.
 - A plugin wiki under `docs/plugin-wiki/`: why the skill was refactored, how the pieces fit, eleven
   worked scenarios for building a plugin, and a field-by-field reference.
   `docs/PLUGIN_ARCHITECTURE.md` is a generated single-page build of it.
