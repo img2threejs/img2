@@ -20,7 +20,7 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   this release exists so the feature is addressable by version.
 - `steps.json` `provides` rows and every declaration file a plugin ships are validated at doctor
   time: schema/version bounds, artifact kind/path (confined under `.img2/artifacts/<plugin-id>/`),
-  and a `deterministic` boolean beside every `provides`.
+  and a `deterministic` boolean beside every target-providing `provides` (`from: "sculpt-spec"`).
 - A plugin wiki under `docs/plugin-wiki/`: why the skill was refactored, how the pieces fit, eleven
   worked scenarios for building a plugin, and a field-by-field reference.
   `docs/PLUGIN_ARCHITECTURE.md` is a generated single-page build of it.
@@ -104,7 +104,7 @@ plugin registry, the workspace state envelope, the gate runner, and the contract
   the lock across the whole read-modify-write, and `tests/python/test_state.py` demonstrably catches the
   bug it guards against.
 
-[Unreleased]: https://github.com/img2threejs/img2/compare/v0.2.1...HEAD
+[0.2.2]: https://github.com/img2threejs/img2/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/img2threejs/img2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/img2threejs/img2/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/img2threejs/img2/compare/v0.1.0...v0.1.1
