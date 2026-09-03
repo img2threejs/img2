@@ -1,6 +1,6 @@
 {
   "name": "img2",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Plugin harness for the img2 ecosystem: everything is a plugin.",
   "license": "Apache-2.0",
   "type": "module",

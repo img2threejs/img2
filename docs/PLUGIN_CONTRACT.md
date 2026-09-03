@@ -291,8 +291,10 @@ placeholder vocabulary below is NOT the one this section states for `steps.json`
 mechanism itself is the base's, stated here only as far as `doctor` validates it): a required `id`;
 optional `setupSteps`/`passSteps`, each an array of `[stepId, command]` **pairs** — not `{id, command}`
 rows, and this file has **no `actor` field**; `setupAnchorBefore`/`passAnchorBefore`, required exactly
-when the paired steps array is non-empty; and an optional `specCollection` name. An unrecognised
-top-level key FAILs.
+when the paired steps array is non-empty; optional `rigSteps`, the rig track the base appends after
+its FINAL steps — same `[stepId, command]` pair shape, same per-row hardening, and **no anchor**, by
+design (the rig phase always follows the terminal steps); and an optional `specCollection` name. An
+unrecognised top-level key FAILs.
 
 Its `command` strings are rendered by two different mechanisms, neither of them the tokeniser above:
 `{plugin_dir}` is substituted by a plain string replace when the base splices the profile in, and

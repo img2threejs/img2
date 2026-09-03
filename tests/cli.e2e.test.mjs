@@ -652,6 +652,42 @@ test('doctor validates domain.json: an unknown key is refused', (t) => {
   assert.match(doctor.stdout, /domain\.json has unknown key\(s\): bogus/)
 })
 
+test('doctor accepts rigSteps with no anchor, and still hardens its rows', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-rig', {
+    domain: {
+      id: 'dom-rig',
+      rigSteps: [
+        ['rig-contract-read', 'Read {plugin_dir}/reference/contract.md completely'],
+        ['rig-run', 'python3 {plugin_dir}/tools/noop.py --payload rig-gate-payload.json'],
+      ],
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+})
+
+test('doctor refuses a rigSteps command row with shell metacharacters or angle brackets', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'dom-rig-bad', {
+    domain: {
+      id: 'dom-rig-bad',
+      rigSteps: [
+        ['bad-chain', 'node {plugin_dir}/tools/a.mjs && python3 {plugin_dir}/tools/b.py'],
+        ['bad-bracket', 'Export buffers with --url <preview> then verify'],
+      ],
+    },
+  })
+  const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const doctor = run(['doctor'], sb.env, sb.root)
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr)
+  assert.match(doctor.stdout, /"bad-chain": command contains shell metacharacter/)
+  assert.match(doctor.stdout, /"bad-bracket": command uses angle-bracket pseudo-placeholder/)
+})
+
 test('doctor validates domain.json: setupSteps without setupAnchorBefore is refused', (t) => {
   const sb = installed(t)
   const plugin = makePluginRepo(sb.root, 'dom-noanchor', {

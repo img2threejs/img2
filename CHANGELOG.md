@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
+## [0.2.3] — 2026-09-03
+
+### Added
+
+- **`rigSteps` in `domain.json`.** The base registry gained the key on 2026-09-03 (v1.5.2's rig
+  track ported into `forge/_shared/domains/`), which silently broke the "mirrors `_ALLOWED`
+  exactly" contract this file's validator claims — doctor rejected a key the base accepts. The
+  validator now admits `rigSteps`, hardens its rows like any other (placeholder, angle-bracket,
+  command-row metacharacters), and demands **no anchor**: the rig track is appended after the FINAL
+  steps by design. `PLUGIN_CONTRACT.md` §10 documents it.
+
 ## [0.2.2] — 2026-09-02
 
 ### Added
@@ -104,6 +115,7 @@ plugin registry, the workspace state envelope, the gate runner, and the contract
   the lock across the whole read-modify-write, and `tests/python/test_state.py` demonstrably catches the
   bug it guards against.
 
+[0.2.3]: https://github.com/img2threejs/img2/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/img2threejs/img2/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/img2threejs/img2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/img2threejs/img2/compare/v0.1.1...v0.2.0

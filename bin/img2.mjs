@@ -876,7 +876,7 @@ export function targetSiblingFinding(step) {
 // Mirrors forge/_shared/domains/__init__.py's `_ALLOWED` exactly -- an unknown key there is a base
 // refusal (DomainRegistryError), so it must be a harness refusal too, or a typo'd key would pass
 // `doctor` clean and only fail once the base actually loads it.
-const DOMAIN_JSON_ALLOWED_KEYS = new Set(['id', 'setupSteps', 'setupAnchorBefore', 'passSteps', 'passAnchorBefore', 'specCollection'])
+const DOMAIN_JSON_ALLOWED_KEYS = new Set(['id', 'setupSteps', 'setupAnchorBefore', 'passSteps', 'passAnchorBefore', 'specCollection', 'rigSteps'])
 
 // `domain.json` steps arrive as `[stepId, command]` pairs (not `{id, command}` rows) and carry no
 // `actor` field -- the base splices them straight into a checklist (forge/_shared/domains/__init__.py,
@@ -966,12 +966,16 @@ export function domainJsonFindings(dir, pluginId) {
         (isDomainCommandRow(command, dir) ? shellMetacharFinding(command, DOMAIN_JSON_ALLOWED_PLACEHOLDERS) : null)
       if (bad) out.push('domain.json "' + stepId + '": ' + bad)
     }
-    if (steps.length && (typeof raw[anchorKey] !== 'string' || !raw[anchorKey])) {
+    if (anchorKey && steps.length && (typeof raw[anchorKey] !== 'string' || !raw[anchorKey])) {
       out.push('domain.json: "' + key + '" is non-empty but "' + anchorKey + '" is missing')
     }
   }
   checkSteps('setupSteps', 'setupAnchorBefore')
   checkSteps('passSteps', 'passAnchorBefore')
+  // rigSteps are appended after the FINAL steps as the rig track; there is no anchor by design
+  // (forge/_shared/domains/__init__.py documents the same), so no anchor is demanded -- but every
+  // row still gets the placeholder, angle-bracket and command-row metachar checks above.
+  checkSteps('rigSteps', null)
   if ('specCollection' in raw && (typeof raw.specCollection !== 'string' || !raw.specCollection)) {
     out.push('domain.json: "specCollection" must be a non-empty string')
   }
