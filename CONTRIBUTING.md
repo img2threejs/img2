@@ -52,3 +52,24 @@ it demonstrably catches the bug it guards against.
 Tag `vX.Y.Z` (annotated) matching `package.json`; `img2 add` and self-installs resolve
 the newest semver tag. Keep `docs/PLAN.md` phase status current when a release changes
 what is true.
+
+## Publishing
+
+The harness itself ships to npm as the `img2` package. `.github/workflows/ci.yml` and
+`publish.yml` are thin callers into the org's shared `img2threejs/ci-workflows` repo, pinned by
+full commit SHA (org policy — never a branch or tag ref); re-pin to `ci-workflows`'s merged
+`main` SHA once [img2threejs/ci-workflows#2](https://github.com/img2threejs/ci-workflows/pull/2)
+lands, and again whenever a reusable workflow there changes in a way this repo needs.
+
+To release: bump `package.json`'s `version` and add a `CHANGELOG.md` entry, tag `vX.Y.Z`
+matching it, and push the tag. The reusable `npm-publish.yml` workflow validates the tag against
+`package.json`, refuses `preinstall`/`install`/`postinstall`/`prepare` lifecycle scripts, runs
+`npm test` in a job with no access to the npm token, then publishes with
+`npm publish --provenance --access public`, authenticated by the **`NPM_TOKEN`** secret (a
+granular npm automation token — this is a plain token, not OIDC trusted publishing). It no-ops if
+the tagged version is already on the registry, and a prerelease tag (`v0.3.0-beta.1`) publishes
+under its prerelease dist-tag (`beta`).
+
+`NPM_TOKEN` must exist as an org or repo Actions secret before the first tag push — the reusable
+workflow publishes straight from CI, so unlike a trusted-publishing setup there is no separate
+manual first-publish step once the token is in place.

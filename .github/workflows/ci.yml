@@ -1,0 +1,14 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    # ci-workflows python-ci @ main
+    uses: img2threejs/ci-workflows/.github/workflows/python-ci.yml@4b7a0612d2c52815792124a18ae3f9032a4f0a88
+    with:
+      python-version: '3.12'
+      test-command: npm test

@@ -75,6 +75,113 @@ function pluginWithStep(root, name, command) {
   return makePluginRepo(root, name, { steps: [{ id: 'run', title: 'Run', command }] })
 }
 
+// ---------------------------------------------------------------- fake npm registry
+//
+// There is no real npm registry to point at in a test, and `npm add`'s job is exactly the two
+// subprocess calls a fake `npm` on PATH can intercept (`view`, `pack`) -- the rest (readManifest,
+// staging, the registry row) is identical to the git path and already covered by it. `tar` is left
+// real: extraction (untrusted content -> disk) is the harness's own code, not npm's.
+
+// A package's file content -- the same shape `makePluginRepo` writes, minus the git repo (an
+// npm-distributed plugin has no .git at all, which is exactly the case the doctor gitignore-check
+// fix guards).
+function npmPluginFiles(name, version, { capabilities, tool = 'print("ok")\n' } = {}) {
+  const manifest = {
+    schema: 1,
+    name,
+    version,
+    description: 'Test npm plugin ' + name + '.',
+    capabilities: capabilities || [{ from: 'image', to: 'threejs-code' }],
+    requires: { harness: '>=0.1.0', coreApi: 1 },
+  }
+  return {
+    'plugin.json': JSON.stringify(manifest, null, 2) + '\n',
+    'SKILL.md': '# ' + name + '\n',
+    '.gitignore': '_img2_local.py\n',
+    'tools/noop.py': tool,
+  }
+}
+
+// Lays a package version's files under a "package/" directory -- the same prefix a real npm
+// tarball uses, and the one the harness's `tar --strip-components=1` expects to strip.
+function fakeNpmPackage(root, name, version, integrity, files) {
+  const pkgDir = path.join(root, 'fake-npm-pkgs', name.replace('/', '__'), version, 'package')
+  fs.mkdirSync(pkgDir, { recursive: true })
+  for (const [rel, content] of Object.entries(files)) {
+    const dest = path.join(pkgDir, rel)
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    fs.writeFileSync(dest, content)
+  }
+  return { name, version, integrity, dir: path.dirname(pkgDir) }
+}
+
+function fakeNpmScript(manifestPath) {
+  return [
+    '#!/usr/bin/env node',
+    'const fs = require("fs")',
+    'const path = require("path")',
+    'const { execFileSync } = require("child_process")',
+    'const MANIFEST = ' + JSON.stringify(manifestPath),
+    'const packages = JSON.parse(fs.readFileSync(MANIFEST, "utf8"))',
+    'const args = process.argv.slice(2)',
+    'const sub = args[0]',
+    'function findPkg(spec) {',
+    '  let name = spec, version = null',
+    '  const at = spec.startsWith("@") ? spec.indexOf("@", 1) : spec.indexOf("@")',
+    '  if (at !== -1) { name = spec.slice(0, at); version = spec.slice(at + 1) }',
+    '  const candidates = packages.filter((p) => p.name === name)',
+    '  if (!candidates.length) { console.error("fake npm: no such package " + name); process.exit(1) }',
+    '  const pkg = version ? candidates.find((p) => p.version === version) : candidates[candidates.length - 1]',
+    '  if (!pkg) { console.error("fake npm: no such version " + spec); process.exit(1) }',
+    '  return pkg',
+    '}',
+    '// A real npm often warns on stderr for reasons unrelated to success (e.g. a TLS override); the',
+    '// harness must tolerate stderr noise on a successful call, so the fake always emits one.',
+    'process.stderr.write("npm warn (fake) using a test registry\\n")',
+    'if (sub === "view") {',
+    '  const pkg = findPkg(args[1])',
+    '  if (args.includes("--json")) console.log(JSON.stringify({ version: pkg.version, dist: { integrity: pkg.integrity } }))',
+    '  else console.log(pkg.version)',
+    '  process.exit(0)',
+    '}',
+    'if (sub === "pack") {',
+    '  const pkg = findPkg(args[1])',
+    '  const dest = args[args.indexOf("--pack-destination") + 1]',
+    '  fs.mkdirSync(dest, { recursive: true })',
+    '  const tarballName = pkg.name.replace("@", "").replace("/", "-") + "-" + pkg.version + ".tgz"',
+    '  execFileSync("tar", ["-czf", path.join(dest, tarballName), "-C", pkg.dir, "package"])',
+    '  console.log(tarballName)',
+    '  process.exit(0)',
+    '}',
+    'console.error("fake npm: unsupported subcommand " + sub)',
+    'process.exit(1)',
+  ].join('\n') + '\n'
+}
+
+// Starts a fake npm registry backed by a JSON manifest file the fake `npm` executable re-reads on
+// every invocation -- so a test can register a newer version mid-run (simulating a new release)
+// without restarting anything. Returns the PATH-prependable bin dir and the manifest path.
+function startFakeNpm(root, packages) {
+  const manifestPath = path.join(root, 'fake-npm-manifest-' + Math.random().toString(36).slice(2) + '.json')
+  fs.writeFileSync(manifestPath, JSON.stringify(packages.map(({ name, version, integrity, dir }) => ({ name, version, integrity, dir }))))
+  const binDir = path.join(root, 'fake-npm-bin-' + Math.random().toString(36).slice(2))
+  fs.mkdirSync(binDir, { recursive: true })
+  const script = path.join(binDir, 'npm')
+  fs.writeFileSync(script, fakeNpmScript(manifestPath))
+  fs.chmodSync(script, 0o755)
+  return { binDir, manifestPath }
+}
+
+function addFakeNpmVersion(manifestPath, entry) {
+  const packages = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  packages.push(entry)
+  fs.writeFileSync(manifestPath, JSON.stringify(packages))
+}
+
+function withFakeNpm(sb, binDir) {
+  return { ...sb.env, PATH: binDir + path.delimiter + sb.env.PATH }
+}
+
 function addCapPlugin(sb, name, capabilities, extra = {}) {
   const plugin = makePluginRepo(sb.root, name, { manifest: { capabilities }, ...extra })
   const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
@@ -1582,4 +1689,172 @@ test('an unknown actor is refused rather than defaulted', (t) => {
   const env = JSON.parse(r.stdout)
   assert.equal(env.status, 'data-fault')
   assert.match(env.problems[0].reason, /"actor" must be one of program, agent, human/)
+})
+
+// ---------------------------------------------------------------- npm: source
+
+test('add npm: a default-org scoped package is fetched, pinning version and dist.integrity', (t) => {
+  const sb = installed(t)
+  const pkg = fakeNpmPackage(
+    sb.root,
+    '@img2threejs/plugin-fake',
+    '0.1.0',
+    'sha512-abc123def456==',
+    npmPluginFiles('plugin-fake', '0.1.0'),
+  )
+  const { binDir } = startFakeNpm(sb.root, [pkg])
+  const env = withFakeNpm(sb, binDir)
+
+  const r = run(['add', 'npm:@img2threejs/plugin-fake', '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+
+  const row = JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins[0]
+  assert.equal(row.id, 'plugin-fake')
+  assert.equal(row.repo, 'npm:@img2threejs/plugin-fake')
+  assert.equal(row.ref, '0.1.0')
+  assert.equal(row.resolvedSha, 'sha512-abc123def456==')
+
+  const dest = path.join(sb.H, 'plugins', 'plugin-fake')
+  assert.ok(fs.existsSync(path.join(dest, 'plugin.json')))
+  assert.ok(!fs.existsSync(path.join(dest, '.git')), 'npm fetch must not leave a git checkout behind')
+  const link = path.join(sb.HOME, '.claude', 'skills', 'img2-plugin-fake')
+  assert.equal(fs.realpathSync(link), fs.realpathSync(dest))
+
+  const doctor = run(['doctor'], env, sb.root)
+  assert.equal(doctor.status, 0, 'a non-git plugin dir must not be held to the .gitignore rule: ' + doctor.stdout + doctor.stderr)
+
+  const list = run(['list'], env, sb.root)
+  // shortSha shows the 7 chars AFTER "sha512-" (the prefix itself would be uninformative), not the
+  // literal prefix -- "sha512-abc123def456==" -> "abc123d".
+  assert.match(list.stdout, /plugin-fake\s+0\.1\.0\s+0\.1\.0\s+abc123d/, list.stdout)
+})
+
+test('add npm: an explicit @version pins that release', (t) => {
+  const sb = installed(t)
+  const older = fakeNpmPackage(sb.root, '@img2threejs/plugin-pin', '0.1.0', 'sha512-old==', npmPluginFiles('plugin-pin', '0.1.0'))
+  const newer = fakeNpmPackage(sb.root, '@img2threejs/plugin-pin', '0.2.0', 'sha512-new==', npmPluginFiles('plugin-pin', '0.2.0'))
+  const { binDir } = startFakeNpm(sb.root, [older, newer])
+  const env = withFakeNpm(sb, binDir)
+
+  const r = run(['add', 'npm:@img2threejs/plugin-pin@0.1.0', '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const row = JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins[0]
+  assert.equal(row.ref, '0.1.0')
+  assert.equal(row.resolvedSha, 'sha512-old==')
+})
+
+test('add npm: an unscoped or non-default-scope package needs --allow-any-source, printing the same confirmation as a git source', (t) => {
+  const sb = installed(t)
+  const pkg = fakeNpmPackage(sb.root, 'some-pkg', '1.0.0', 'sha512-xyz==', npmPluginFiles('some-pkg', '1.0.0'))
+  const { binDir } = startFakeNpm(sb.root, [pkg])
+  const env = withFakeNpm(sb, binDir)
+
+  let r = run(['add', 'npm:some-pkg'], env, sb.root)
+  assert.equal(r.status, 2, 'expected refusal, got: ' + r.stderr + r.stdout)
+  assert.match(r.stderr, /allow-any-source/)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins, [])
+
+  r = run(['add', 'npm:some-pkg', '--allow-any-source'], env, sb.root)
+  assert.equal(r.status, 3, 'expected NEEDS_INPUT: ' + r.stderr + r.stdout)
+
+  r = run(['add', 'npm:some-pkg', '--allow-any-source', '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.match(r.stdout, /about to clone and link a non-img2threejs source: npm:some-pkg/)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins.length, 1)
+})
+
+// The fake registry's `npm` always writes a warning to stderr (mirroring a real npm run under
+// NODE_TLS_REJECT_UNAUTHORIZED=0) on every call, including the successful ones this add makes --
+// exercising that a non-empty stderr from a subprocess that exits 0 is not itself a failure.
+test('add npm: a non-empty stderr from npm on an otherwise successful call is not a failure', (t) => {
+  const sb = installed(t)
+  const pkg = fakeNpmPackage(sb.root, '@img2threejs/plugin-noisy', '0.1.0', 'sha512-noisy==', npmPluginFiles('plugin-noisy', '0.1.0'))
+  const { binDir } = startFakeNpm(sb.root, [pkg])
+  const env = withFakeNpm(sb, binDir)
+
+  const r = run(['add', 'npm:@img2threejs/plugin-noisy', '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+})
+
+test('add npm: npm missing from PATH is a clear failure, not a crash', (t) => {
+  const sb = installed(t)
+  const r = run(['add', 'npm:@img2threejs/plugin-x', '--yes'], { ...sb.env, PATH: '' }, sb.root)
+  assert.equal(r.status, 1, r.stderr + r.stdout)
+  assert.match(r.stderr, /npm is not on PATH/)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins, [])
+})
+
+test('update: an npm row fetches a newer version, backs up the old clone, and updates ref/resolvedSha', (t) => {
+  const sb = installed(t)
+  const v1 = fakeNpmPackage(sb.root, '@img2threejs/plugin-up', '0.1.0', 'sha512-v1==', npmPluginFiles('plugin-up', '0.1.0'))
+  const { binDir, manifestPath } = startFakeNpm(sb.root, [v1])
+  const env = withFakeNpm(sb, binDir)
+
+  let r = run(['add', 'npm:@img2threejs/plugin-up', '--yes'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+
+  let check = run(['update', '--check'], env, sb.root)
+  assert.equal(check.status, 0, 'nothing pending yet: ' + check.stdout + check.stderr)
+  assert.match(check.stdout, /up to date/)
+
+  const v2 = fakeNpmPackage(sb.root, '@img2threejs/plugin-up', '0.2.0', 'sha512-v2==', npmPluginFiles('plugin-up', '0.2.0'))
+  addFakeNpmVersion(manifestPath, v2)
+
+  check = run(['update', '--check'], env, sb.root)
+  assert.equal(check.status, 1, 'a pending update must be non-zero: ' + check.stdout)
+  assert.match(check.stdout, /update avail\s+plugin-up 0\.1\.0 -> 0\.2\.0/)
+  // --check must not have touched anything
+  assert.equal(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins[0].ref, '0.1.0')
+
+  r = run(['update'], env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.match(r.stdout, /updated\s+plugin-up -> 0\.2\.0/)
+
+  const row = JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins[0]
+  assert.equal(row.ref, '0.2.0')
+  assert.equal(row.resolvedSha, 'sha512-v2==')
+  assert.ok(fs.readdirSync(path.join(sb.H, 'backups')).some((b) => b.startsWith('plugin-up-')))
+  const manifest = JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins', 'plugin-up', 'plugin.json'), 'utf8'))
+  assert.equal(manifest.version, '0.2.0')
+
+  const doctor = run(['doctor'], env, sb.root)
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr)
+
+  const again = run(['update'], env, sb.root)
+  assert.equal(again.status, 0, again.stderr + again.stdout)
+  assert.match(again.stdout, /update: 0 updated/)
+})
+
+test('update: a --link row is reported as local and left untouched', (t) => {
+  const sb = installed(t)
+  const local = makePluginRepo(sb.root, 'dev-plugin')
+  const r = run(['add', '--link', local], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+
+  const update = run(['update'], sb.env, sb.root)
+  assert.equal(update.status, 0, update.stdout + update.stderr)
+  assert.match(update.stdout, /local\s+dev-plugin \(link:/)
+  assert.equal(fs.realpathSync(path.join(sb.H, 'plugins', 'dev-plugin')), fs.realpathSync(local))
+})
+
+test('update: a git row updates to the newest reachable tag', (t) => {
+  const sb = installed(t)
+  const plugin = makePluginRepo(sb.root, 'git-up', { tag: 'v0.1.0' })
+  let r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+
+  const doc = JSON.parse(fs.readFileSync(path.join(plugin, 'plugin.json'), 'utf8'))
+  doc.version = '0.2.0'
+  fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify(doc, null, 2) + '\n')
+  gitq(['add', '-A'], plugin)
+  gitq(['-c', 'user.name=img2-test', '-c', 'user.email=test@img2.invalid', 'commit', '-q', '-m', 'bump'], plugin)
+  gitq(['tag', 'v0.2.0'], plugin)
+
+  r = run(['update', '--allow-any-source', '--yes'], sb.env, sb.root)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.match(r.stdout, /updated\s+git-up -> v0\.2\.0/)
+
+  const row = JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins[0]
+  assert.equal(row.ref, 'v0.2.0')
+  assert.match(row.resolvedSha, /^[0-9a-f]{40}$/)
 })

@@ -13,9 +13,11 @@ import {
   emptyRegistry,
   findRow,
   mergeAdditionalDirectories,
+  parseNpmSpec,
   parseSemver,
   rangeSatisfied,
   removeRow,
+  resolveNpmSource,
   resolveSource,
   shlexSplit,
   stepArgv,
@@ -69,6 +71,23 @@ test('resolveSource enforces the default org', () => {
   throwsCli(() => resolveSource('file:///tmp/x', false), EXIT.REFUSED, /allow-any-source/)
   assert.equal(resolveSource('evil/plugin-x', true).url, 'https://github.com/evil/plugin-x.git')
   assert.equal(resolveSource('file:///tmp/x', true).url, 'file:///tmp/x')
+})
+
+test('parseNpmSpec splits name and version, treating a scope\'s own "@" as part of the name', () => {
+  assert.deepEqual(parseNpmSpec('npm:@img2threejs/plugin-cs2'), { name: '@img2threejs/plugin-cs2', version: null })
+  assert.deepEqual(parseNpmSpec('npm:@img2threejs/plugin-cs2@0.1.2'), { name: '@img2threejs/plugin-cs2', version: '0.1.2' })
+  assert.deepEqual(parseNpmSpec('npm:some-pkg'), { name: 'some-pkg', version: null })
+  assert.deepEqual(parseNpmSpec('npm:some-pkg@1.0.0'), { name: 'some-pkg', version: '1.0.0' })
+  throwsCli(() => parseNpmSpec('npm:'), EXIT.REFUSED, /needs a package name/)
+  throwsCli(() => parseNpmSpec('npm:some-pkg@'), EXIT.REFUSED, /empty version/)
+})
+
+test('resolveNpmSource enforces the default @img2threejs scope', () => {
+  assert.deepEqual(resolveNpmSource('@img2threejs/plugin-cs2', false), { defaultOrg: true })
+  assert.equal(resolveNpmSource('@evil/plugin-x', true).defaultOrg, false)
+  throwsCli(() => resolveNpmSource('@evil/plugin-x', false), EXIT.REFUSED, /allow-any-source/)
+  throwsCli(() => resolveNpmSource('unscoped-pkg', false), EXIT.REFUSED, /allow-any-source/)
+  assert.equal(resolveNpmSource('unscoped-pkg', true).defaultOrg, false)
 })
 
 test('mergeAdditionalDirectories is idempotent and preserves unknown keys', () => {
