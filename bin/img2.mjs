@@ -130,23 +130,23 @@ function isGitRepo(dir) {
 
 // npm and tar warn on stderr for reasons that have nothing to do with success (e.g. a machine-wide
 // NODE_TLS_REJECT_UNAUTHORIZED=0 makes npm print a TLS warning) -- only a non-zero exit is a failure,
-// stderr content on its own is not, same as `git` above.
-function npm(args) {
+// stderr content on its own is not, same as `git` above. Neither needs git's cwd/env handling, so
+// they share one wrapper instead of each repeating the ENOENT/failure-message shape.
+function runTool(bin, args, execOpts = {}) {
   try {
-    return execFileSync('npm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+    return execFileSync(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], ...execOpts })
   } catch (err) {
-    if (err.code === 'ENOENT') throw new CliError(EXIT.FAIL, 'npm is not on PATH; install npm first')
-    throw new CliError(EXIT.FAIL, 'npm ' + args.join(' ') + ' failed', String(err.stderr || '').trim())
+    if (err.code === 'ENOENT') throw new CliError(EXIT.FAIL, bin + ' is not on PATH; install ' + bin + ' first')
+    throw new CliError(EXIT.FAIL, bin + ' ' + args.join(' ') + ' failed', String(err.stderr || '').trim())
   }
 }
 
+function npm(args) {
+  return runTool('npm', args, { encoding: 'utf8' }).trim()
+}
+
 function tar(args) {
-  try {
-    execFileSync('tar', args, { stdio: ['ignore', 'pipe', 'pipe'] })
-  } catch (err) {
-    if (err.code === 'ENOENT') throw new CliError(EXIT.FAIL, 'tar is not on PATH; install tar first')
-    throw new CliError(EXIT.FAIL, 'tar ' + args.join(' ') + ' failed', String(err.stderr || '').trim())
-  }
+  runTool('tar', args)
 }
 
 // ---------------------------------------------------------------- semver
@@ -1235,12 +1235,20 @@ function latestTagFor(url) {
   return tags.length ? tags[0].tag : null
 }
 
+// Clears a stale leftover from a previous crashed run under the same pid and ensures the parent
+// (pluginsDir(H)) exists; the dir itself is left for the caller to create when it actually has
+// content to put there. Shared by the git and npm fetch paths so "staging directory" has one
+// lifecycle, not one hand-written per source kind.
+function freshStagingDir(dir) {
+  fs.rmSync(dir, { recursive: true, force: true })
+  fs.mkdirSync(path.dirname(dir), { recursive: true })
+  return dir
+}
+
 async function resolveRefAndClone(H, spec, opts) {
   const { url, label, defaultOrg } = resolveSource(spec, opts.allowAnySource)
   await confirmOutOfOrgSource(url, defaultOrg, opts)
-  const staging = path.join(pluginsDir(H), '.staging-' + process.pid)
-  fs.rmSync(staging, { recursive: true, force: true })
-  fs.mkdirSync(pluginsDir(H), { recursive: true })
+  const staging = freshStagingDir(path.join(pluginsDir(H), '.staging-' + process.pid))
 
   let ref = opts.ref || latestTagFor(url)
 
@@ -1259,18 +1267,10 @@ async function resolveRefAndClone(H, spec, opts) {
   return { staging, label, ref, resolvedSha }
 }
 
-// npm's counterpart to resolveRefAndClone: same return shape ({staging, label, ref, resolvedSha}),
-// so `cmdAdd` and `cmdUpdate` need only pick which of the two to call, never branch afterwards.
-// `ref` is the resolved version; `resolvedSha` is npm's own `dist.integrity` (a `sha512-...` string,
-// not a git SHA -- this harness has no other notion of "pinned content hash" for a package it did
-// not clone, and integrity is exactly that for a tarball).
-async function resolveNpmAndFetch(H, spec, opts) {
-  const { name, version: wantVersion } = parseNpmSpec(spec)
-  const { defaultOrg } = resolveNpmSource(name, opts.allowAnySource)
-  const label = 'npm:' + name
-  await confirmOutOfOrgSource(label, defaultOrg, opts)
-
-  const nameAtSpec = wantVersion ? name + '@' + wantVersion : name
+// One `npm view` call, parsed and validated -- shared by `resolveNpmAndFetch` (add) and `cmdUpdate`
+// (check for a newer version), so update never has to view a package a second time just to fetch
+// the version it already viewed.
+function npmViewInfo(nameAtSpec) {
   const viewed = npm(['view', nameAtSpec, 'version', 'dist.integrity', '--json'])
   let info
   try {
@@ -1285,21 +1285,22 @@ async function resolveNpmAndFetch(H, spec, opts) {
   if (!info || typeof info.version !== 'string' || !info.dist || typeof info.dist.integrity !== 'string') {
     throw new CliError(EXIT.FAIL, 'npm view ' + nameAtSpec + ' did not return a version and dist.integrity', viewed)
   }
+  return { version: info.version, integrity: info.dist.integrity }
+}
 
-  const staging = path.join(pluginsDir(H), '.staging-' + process.pid)
-  fs.rmSync(staging, { recursive: true, force: true })
-  fs.mkdirSync(pluginsDir(H), { recursive: true })
-
-  const packStaging = path.join(pluginsDir(H), '.staging-pack-' + process.pid)
-  fs.rmSync(packStaging, { recursive: true, force: true })
+// Fetches one already-resolved npm package version into a fresh staging dir under pluginsDir(H).
+// Version/integrity resolution is npmViewInfo's job, kept separate for the same reason.
+function fetchNpmTarball(H, name, version) {
+  const staging = freshStagingDir(path.join(pluginsDir(H), '.staging-' + process.pid))
+  const packStaging = freshStagingDir(path.join(pluginsDir(H), '.staging-pack-' + process.pid))
   fs.mkdirSync(packStaging, { recursive: true })
   try {
-    npm(['pack', name + '@' + info.version, '--pack-destination', packStaging])
+    npm(['pack', name + '@' + version, '--pack-destination', packStaging])
     const tarballs = fs.readdirSync(packStaging).filter((f) => f.endsWith('.tgz'))
     if (tarballs.length !== 1) {
       throw new CliError(
         EXIT.FAIL,
-        'npm pack ' + name + '@' + info.version + ' produced ' + tarballs.length + ' tarball(s) in ' + packStaging + ', expected 1',
+        'npm pack ' + name + '@' + version + ' produced ' + tarballs.length + ' tarball(s) in ' + packStaging + ', expected 1',
       )
     }
     fs.mkdirSync(staging, { recursive: true })
@@ -1309,8 +1310,24 @@ async function resolveNpmAndFetch(H, spec, opts) {
   } finally {
     fs.rmSync(packStaging, { recursive: true, force: true })
   }
+  return staging
+}
 
-  return { staging, label, ref: info.version, resolvedSha: info.dist.integrity }
+// npm's counterpart to resolveRefAndClone: same return shape ({staging, label, ref, resolvedSha}),
+// so `cmdAdd` needs only pick which of the two to call, never branch afterwards. `ref` is the
+// resolved version; `resolvedSha` is npm's own `dist.integrity` (a `sha512-...` string, not a git
+// SHA -- this harness has no other notion of "pinned content hash" for a package it did not clone,
+// and integrity is exactly that for a tarball).
+async function resolveNpmAndFetch(H, spec, opts) {
+  const { name, version: wantVersion } = parseNpmSpec(spec)
+  const { defaultOrg } = resolveNpmSource(name, opts.allowAnySource)
+  const label = 'npm:' + name
+  await confirmOutOfOrgSource(label, defaultOrg, opts)
+
+  const nameAtSpec = wantVersion ? name + '@' + wantVersion : name
+  const { version, integrity } = npmViewInfo(nameAtSpec)
+  const staging = fetchNpmTarball(H, name, version)
+  return { staging, label, ref: version, resolvedSha: integrity }
 }
 
 async function cmdAdd(opts, spec) {
@@ -1755,8 +1772,11 @@ async function cmdUpdate(opts, args) {
       let latest, fetch
       if (row.repo.startsWith('npm:')) {
         const name = row.repo.slice('npm:'.length)
-        latest = npm(['view', name, 'version'])
-        fetch = () => resolveNpmAndFetch(H, 'npm:' + name + '@' + latest, { ...opts, allowAnySource: true })
+        // One view up front decides whether there is anything to do; fetch (below) reuses its
+        // result instead of viewing the same package a second time just to learn what it just did.
+        const info = npmViewInfo(name)
+        latest = info.version
+        fetch = () => ({ staging: fetchNpmTarball(H, name, info.version), ref: info.version, resolvedSha: info.integrity })
       } else {
         const { url } = resolveSource(row.repo, true)
         latest = latestTagFor(url)
