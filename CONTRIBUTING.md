@@ -52,3 +52,13 @@ it demonstrably catches the bug it guards against.
 Tag `vX.Y.Z` (annotated) matching `package.json`; `img2 add` and self-installs resolve
 the newest semver tag. Keep `docs/PLAN.md` phase status current when a release changes
 what is true.
+
+## Publishing
+
+The harness itself ships to npm as the `img2` package. Bump `package.json`'s `version` and add
+a `CHANGELOG.md` entry, tag `vX.Y.Z` matching it, and push the tag — `.github/workflows/publish.yml`
+runs the full test suite and publishes via npm's trusted publishing (OIDC; no token secret).
+
+Trusted publishing has to be configured on the npm side against an existing version, so the very
+first publish of a given major must be done manually by a maintainer logged in to npm
+(`npm publish --access public`) before the workflow can take over.
