@@ -116,9 +116,20 @@ adopted the day a provider actually needs it, per the project's own CUT rule.
 
 - `id` = manifest `name` = host link suffix. `img2 add` on an existing id exits non-zero
   naming the row; replacement requires `--force`.
-- `ref` defaults to the repo's newest reachable tag; a moving branch requires explicit
-  `--ref <branch>` and is recorded as such. `resolvedSha` is always recorded so a user's
-  setup is reproducible.
+- `repo` is one of: `org/repo` shorthand, a git URL, `npm:<name>` (an npm-distributed
+  plugin), or `link:<path>` (a `--link`'d local checkout). The four keys stay the same
+  across all of them — only what `ref`/`resolvedSha` mean changes.
+- For a git `repo`, `ref` defaults to the repo's newest reachable tag; a moving branch
+  requires explicit `--ref <branch>` and is recorded as such. `resolvedSha` is the
+  resolved commit SHA.
+- For an `npm:<name>` `repo`, `ref` is the resolved version (an explicit `npm:<name>@<version>`
+  spec pins it; otherwise the newest published version) and `resolvedSha` is npm's own
+  `dist.integrity` for that version (a `sha512-…` string, not a git SHA) — this harness's
+  only other notion of "pinned content hash" for a package it fetched instead of cloning.
+- `resolvedSha` is always recorded, whatever its form, so a user's setup is reproducible.
+- `img2 update [<id>] [--check]` re-resolves each row's source the same way `add` would
+  (newest git tag, or newest npm version) and re-fetches it in place if it differs from
+  `ref`; a `link:` row has nothing to fetch and is left untouched.
 
 ### Reserved: `overrides`
 
@@ -146,10 +157,11 @@ four rules; it defines no mechanism.
 
 ## 7. Trust boundary
 
-- `img2 add <spec>` accepts `org/repo`, a URL, or `--link <localpath>` (symlink a local
-  checkout for development; no clone).
-- Default allowed source is the `img2threejs/*` org. Anything else requires
-  `--allow-any-source` and prints what it is about to clone and link.
+- `img2 add <spec>` accepts `org/repo`, a URL, `npm:<name>[@<version>]`, or
+  `--link <localpath>` (symlink a local checkout for development; no clone).
+- Default allowed source is the `img2threejs/*` org (git) or the `@img2threejs` scope
+  (npm — this project's own plugins are published as `@img2threejs/plugin-*`). Anything
+  else requires `--allow-any-source` and prints what it is about to clone and link.
 - The harness NEVER runs plugin tests or imports plugin code during add/doctor/sync.
 - Threat model: a plugin is arbitrary code the agent will later execute in the user's
   workspace. `add` therefore pins (`resolvedSha`), attributes (registry row), and links

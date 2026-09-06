@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
+## [Unreleased]
+
+### Added
+
+- **`npm:` plugin source.** `img2 add npm:<name>[@<version>]` fetches a plugin from npm instead of
+  git — `npm view` resolves the version and `dist.integrity`, `npm pack` fetches the tarball, and
+  the harness extracts it itself (stripping the tarball's `package/` prefix) into the same
+  staging → validate → link flow git installs already go through. Default trust is the
+  `@img2threejs` scope, mirroring the `img2threejs/*` git org; anything else needs
+  `--allow-any-source`. The registry row keeps its four keys: `repo` becomes `npm:<name>`, `ref` is
+  the resolved version, `resolvedSha` is npm's `dist.integrity` (a `sha512-…` string, not a git SHA).
+- **`img2 update [<id>] [--check]`.** Re-checks every registered plugin's source for something
+  newer — the newest npm version or the newest reachable git tag — and re-fetches it in place if
+  so, backing up the previous clone. A `link:` row is a local dev checkout and is left alone.
+  `--check` reports what is pending without fetching anything, exiting non-zero if there is any.
+- Audited every git-specific assumption doctor/list/add made about a plugin directory: the
+  `.gitignore` covers `_img2_local.py` check now only runs when the plugin dir is actually a git
+  checkout (an npm-fetched or bare `--link`'d directory has no `.git` and no such hazard), and the
+  short-SHA display in `img2 add`/`img2 list` now shows a useful slice of an npm `sha512-…`
+  integrity string instead of just the literal `sha512-` prefix.
+- `package.json`'s `files` field now excludes `__pycache__/`, `*.pyc`, and any stray `.omc/`
+  directory wherever they occur under `docs/`/`img2_core/` — `npm pack` does not consult
+  `.gitignore` for a directory explicitly listed in `files`, so without this a local dev artifact
+  left in the working tree would have shipped in the published tarball.
+- CI: `.github/workflows/ci.yml` runs the full test suite on every PR and push to `main`;
+  `.github/workflows/publish.yml` publishes `img2` to npm via trusted publishing (OIDC) on a
+  `vX.Y.Z` tag push.
+
 ## [0.2.3] — 2026-09-03
 
 ### Added
