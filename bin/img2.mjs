@@ -126,6 +126,29 @@ function isGitRepo(dir) {
   }
 }
 
+// ---------------------------------------------------------------- npm & tar
+
+// npm and tar warn on stderr for reasons that have nothing to do with success (e.g. a machine-wide
+// NODE_TLS_REJECT_UNAUTHORIZED=0 makes npm print a TLS warning) -- only a non-zero exit is a failure,
+// stderr content on its own is not, same as `git` above.
+function npm(args) {
+  try {
+    return execFileSync('npm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new CliError(EXIT.FAIL, 'npm is not on PATH; install npm first')
+    throw new CliError(EXIT.FAIL, 'npm ' + args.join(' ') + ' failed', String(err.stderr || '').trim())
+  }
+}
+
+function tar(args) {
+  try {
+    execFileSync('tar', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new CliError(EXIT.FAIL, 'tar is not on PATH; install tar first')
+    throw new CliError(EXIT.FAIL, 'tar ' + args.join(' ') + ' failed', String(err.stderr || '').trim())
+  }
+}
+
 // ---------------------------------------------------------------- semver
 
 export function parseSemver(s) {
@@ -172,6 +195,35 @@ export function resolveSource(spec, allowAny) {
   const defaultOrg = Boolean(gh && gh[1] === DEFAULT_ORG)
   if (!defaultOrg && !allowAny) refuse('"' + spec + '"')
   return { url: spec, label: spec, defaultOrg }
+}
+
+// An `npm:` spec is `npm:<name>` or `npm:<name>@<version>`; `<name>` may itself start with a
+// scope ("@scope/pkg"), so the version separator is the first "@" AFTER that leading one, not the
+// first "@" in the string.
+export function parseNpmSpec(spec) {
+  const rest = spec.slice('npm:'.length)
+  const at = rest.startsWith('@') ? rest.indexOf('@', 1) : rest.indexOf('@')
+  const name = at === -1 ? rest : rest.slice(0, at)
+  const version = at === -1 ? null : rest.slice(at + 1)
+  if (!name) throw new CliError(EXIT.REFUSED, 'npm: source needs a package name', spec)
+  if (version === '') throw new CliError(EXIT.REFUSED, 'npm: source has an empty version after "@"', spec)
+  return { name, version }
+}
+
+// The npm equivalent of `resolveSource`'s org check: the default-trusted scope is "@<DEFAULT_ORG>",
+// matching the "@img2threejs/plugin-*" packages this harness's own plugins are published as.
+// Unscoped packages are never default-trusted, same as a bare non-shorthand git URL.
+export function resolveNpmSource(name, allowAny) {
+  const scoped = /^@([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(name)
+  const defaultOrg = Boolean(scoped && scoped[1] === DEFAULT_ORG)
+  if (!defaultOrg && !allowAny) {
+    throw new CliError(
+      EXIT.REFUSED,
+      'source npm package "' + name + '" is outside the default @' + DEFAULT_ORG + ' scope',
+      'pass --allow-any-source to accept npm:' + name,
+    )
+  }
+  return { defaultOrg }
 }
 
 // ---------------------------------------------------------------- manifest
@@ -416,6 +468,15 @@ function ensureLink(target, dest, H) {
   }
   fs.symlinkSync(dest, target, 'junction')
   return c.state === 'absent' ? 'linked' : 'relinked'
+}
+
+// A git resolvedSha is a 40-hex commit SHA, where the first 7 chars are the conventional short
+// form. An npm resolvedSha is `sha512-<base64>` (dist.integrity) -- slicing the first 7 chars of
+// THAT would just print "sha512-", so this shows the first 7 chars of whichever part actually
+// varies between installs.
+function shortSha(resolvedSha) {
+  const s = String(resolvedSha)
+  return s.startsWith('sha512-') ? s.slice(7, 14) : s.slice(0, 7)
 }
 
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid
@@ -1160,6 +1221,20 @@ async function cmdInstall(opts) {
   }
 }
 
+// Newest reachable semver tag on a remote, or null if it has none (untagged, or tags that don't
+// parse as semver). Shared by `add` (pick a ref when none is pinned) and `update` (decide whether a
+// newer tag exists).
+function latestTagFor(url) {
+  const tags = git(['ls-remote', '--tags', url])
+    .split('\n')
+    .map((line) => line.split('refs/tags/')[1])
+    .filter((t) => t && !t.endsWith('^{}'))
+    .map((t) => ({ tag: t, key: parseSemver(t.replace(/^v/, '')) }))
+    .filter((t) => t.key)
+    .sort((a, b) => cmpSemver(b.key, a.key))
+  return tags.length ? tags[0].tag : null
+}
+
 async function resolveRefAndClone(H, spec, opts) {
   const { url, label, defaultOrg } = resolveSource(spec, opts.allowAnySource)
   await confirmOutOfOrgSource(url, defaultOrg, opts)
@@ -1167,17 +1242,7 @@ async function resolveRefAndClone(H, spec, opts) {
   fs.rmSync(staging, { recursive: true, force: true })
   fs.mkdirSync(pluginsDir(H), { recursive: true })
 
-  let ref = opts.ref || null
-  if (!ref) {
-    const tags = git(['ls-remote', '--tags', url])
-      .split('\n')
-      .map((line) => line.split('refs/tags/')[1])
-      .filter((t) => t && !t.endsWith('^{}'))
-      .map((t) => ({ tag: t, key: parseSemver(t.replace(/^v/, '')) }))
-      .filter((t) => t.key)
-      .sort((a, b) => cmpSemver(b.key, a.key))
-    if (tags.length) ref = tags[0].tag
-  }
+  let ref = opts.ref || latestTagFor(url)
 
   git(['clone', '-q', url, staging])
   if (ref) {
@@ -1192,6 +1257,60 @@ async function resolveRefAndClone(H, spec, opts) {
   }
   const resolvedSha = git(['rev-parse', 'HEAD'], staging)
   return { staging, label, ref, resolvedSha }
+}
+
+// npm's counterpart to resolveRefAndClone: same return shape ({staging, label, ref, resolvedSha}),
+// so `cmdAdd` and `cmdUpdate` need only pick which of the two to call, never branch afterwards.
+// `ref` is the resolved version; `resolvedSha` is npm's own `dist.integrity` (a `sha512-...` string,
+// not a git SHA -- this harness has no other notion of "pinned content hash" for a package it did
+// not clone, and integrity is exactly that for a tarball).
+async function resolveNpmAndFetch(H, spec, opts) {
+  const { name, version: wantVersion } = parseNpmSpec(spec)
+  const { defaultOrg } = resolveNpmSource(name, opts.allowAnySource)
+  const label = 'npm:' + name
+  await confirmOutOfOrgSource(label, defaultOrg, opts)
+
+  const nameAtSpec = wantVersion ? name + '@' + wantVersion : name
+  const viewed = npm(['view', nameAtSpec, 'version', 'dist.integrity', '--json'])
+  let info
+  try {
+    info = JSON.parse(viewed)
+  } catch (err) {
+    throw new CliError(EXIT.FAIL, 'npm view ' + nameAtSpec + ' did not return JSON', viewed)
+  }
+  // A version range matching more than one release comes back as an array; a concrete version or
+  // the default "latest" tag (our only two spec forms) always resolves to exactly one, but take the
+  // newest rather than crash if npm's own resolution ever disagrees.
+  if (Array.isArray(info)) info = info[info.length - 1]
+  if (!info || typeof info.version !== 'string' || !info.dist || typeof info.dist.integrity !== 'string') {
+    throw new CliError(EXIT.FAIL, 'npm view ' + nameAtSpec + ' did not return a version and dist.integrity', viewed)
+  }
+
+  const staging = path.join(pluginsDir(H), '.staging-' + process.pid)
+  fs.rmSync(staging, { recursive: true, force: true })
+  fs.mkdirSync(pluginsDir(H), { recursive: true })
+
+  const packStaging = path.join(pluginsDir(H), '.staging-pack-' + process.pid)
+  fs.rmSync(packStaging, { recursive: true, force: true })
+  fs.mkdirSync(packStaging, { recursive: true })
+  try {
+    npm(['pack', name + '@' + info.version, '--pack-destination', packStaging])
+    const tarballs = fs.readdirSync(packStaging).filter((f) => f.endsWith('.tgz'))
+    if (tarballs.length !== 1) {
+      throw new CliError(
+        EXIT.FAIL,
+        'npm pack ' + name + '@' + info.version + ' produced ' + tarballs.length + ' tarball(s) in ' + packStaging + ', expected 1',
+      )
+    }
+    fs.mkdirSync(staging, { recursive: true })
+    // A published tarball's content sits under a "package/" prefix; strip it so `staging` mirrors
+    // exactly what a git checkout of the plugin repo root would put there.
+    tar(['-xzf', path.join(packStaging, tarballs[0]), '-C', staging, '--strip-components=1'])
+  } finally {
+    fs.rmSync(packStaging, { recursive: true, force: true })
+  }
+
+  return { staging, label, ref: info.version, resolvedSha: info.dist.integrity }
 }
 
 async function cmdAdd(opts, spec) {
@@ -1214,7 +1333,7 @@ async function cmdAdd(opts, spec) {
       manifest = readManifest(source)
       row = { id: manifest.name, repo: 'link:' + source, ref: 'local', resolvedSha: 'local', addedAt: new Date().toISOString() }
     } else {
-      const cloned = await resolveRefAndClone(H, spec, opts)
+      const cloned = spec.startsWith('npm:') ? await resolveNpmAndFetch(H, spec, opts) : await resolveRefAndClone(H, spec, opts)
       staging = cloned.staging
       manifest = readManifest(staging)
       row = { id: manifest.name, repo: cloned.label, ref: cloned.ref, resolvedSha: cloned.resolvedSha, addedAt: new Date().toISOString() }
@@ -1277,7 +1396,7 @@ async function cmdAdd(opts, spec) {
     }
 
     syncAll(H, false)
-    console.log('added ' + id + ' ' + manifest.version + ' (' + row.ref + ' @ ' + String(row.resolvedSha).slice(0, 7) + ')')
+    console.log('added ' + id + ' ' + manifest.version + ' (' + row.ref + ' @ ' + shortSha(row.resolvedSha) + ')')
     return EXIT.OK
   } finally {
     if (staging) fs.rmSync(staging, { recursive: true, force: true })
@@ -1333,7 +1452,7 @@ async function cmdList(opts) {
     try {
       version = JSON.parse(fs.readFileSync(path.join(cloneDir(H, row.id), 'plugin.json'), 'utf8')).version || '?'
     } catch { /* listed anyway; doctor reports the cause */ }
-    console.log(row.id.padEnd(24) + String(version).padEnd(10) + String(row.ref).padEnd(14) + String(row.resolvedSha).slice(0, 7))
+    console.log(row.id.padEnd(24) + String(version).padEnd(10) + String(row.ref).padEnd(14) + shortSha(row.resolvedSha))
   }
   return EXIT.OK
 }
@@ -1402,12 +1521,18 @@ async function cmdDoctor(opts) {
         )
       }
 
-      let ignored = false
-      try {
-        git(['check-ignore', '-q', '--', '_img2_local.py'], dir)
-        ignored = true
-      } catch { /* not ignored, or not a git work tree */ }
-      if (!ignored) err(row.id, '.gitignore does not cover _img2_local.py (contract section 4)')
+      // Only meaningful for a git checkout: the rule guards against _img2_local.py landing in a
+      // commit, which cannot happen in an npm-fetched or bare --link'd directory that has no .git
+      // at all. Requiring a .gitignore entry there would be a git assumption failing a plugin for a
+      // hazard that does not exist for it.
+      if (isGitRepo(dir)) {
+        let ignored = false
+        try {
+          git(['check-ignore', '-q', '--', '_img2_local.py'], dir)
+          ignored = true
+        } catch { /* not ignored */ }
+        if (!ignored) err(row.id, '.gitignore does not cover _img2_local.py (contract section 4)')
+      }
 
       for (const localFile of localFiles(dir)) {
         const rel = path.relative(dir, localFile)
@@ -1598,6 +1723,91 @@ async function cmdSync(opts) {
     syncAll(H, false)
     return EXIT.OK
   } finally {
+    releaseLock()
+  }
+}
+
+// ---------------------------------------------------------------- update
+
+// A `link:` row is a symlink to a local dev checkout -- nothing to fetch, the working tree IS the
+// current version. An `npm:` row's newest version comes from `npm view`; everything else is a git
+// remote, whose newest reachable semver tag comes from `latestTagFor` (same helper `add` uses).
+// Re-confirming an already-registered non-default-org source on every update, rather than trusting
+// it forever once accepted, matches the existing trust boundary: `add --force` re-confirms too.
+async function cmdUpdate(opts, args) {
+  const H = resolveImg2Home(opts.home)
+  const onlyId = args[0] || null
+  acquireLock(H)
+  let staging = null
+  try {
+    const reg = readRegistry(H)
+    const rows = (onlyId ? reg.plugins.filter((r) => r.id === onlyId) : [...reg.plugins]).sort((a, b) => a.id.localeCompare(b.id))
+    if (onlyId && !rows.length) throw new CliError(EXIT.FAIL, 'no registered plugin "' + onlyId + '"')
+
+    let updated = 0
+    let pending = 0
+    for (const row of rows) {
+      if (row.repo.startsWith('link:')) {
+        console.log('  local         ' + row.id + ' (' + row.repo + '); nothing to update')
+        continue
+      }
+
+      let latest, fetch
+      if (row.repo.startsWith('npm:')) {
+        const name = row.repo.slice('npm:'.length)
+        latest = npm(['view', name, 'version'])
+        fetch = () => resolveNpmAndFetch(H, 'npm:' + name + '@' + latest, { ...opts, allowAnySource: true })
+      } else {
+        const { url } = resolveSource(row.repo, true)
+        latest = latestTagFor(url)
+        if (!latest) {
+          console.log('  no tag        ' + row.id + ' (' + row.repo + '); nothing to compare against')
+          continue
+        }
+        fetch = () => resolveRefAndClone(H, row.repo, { ...opts, ref: latest, allowAnySource: true })
+      }
+
+      if (latest === row.ref) {
+        console.log('  up to date    ' + row.id + ' ' + row.ref)
+        continue
+      }
+      pending += 1
+      if (opts.check) {
+        console.log('  update avail  ' + row.id + ' ' + row.ref + ' -> ' + latest)
+        continue
+      }
+
+      const cloned = await fetch()
+      staging = cloned.staging
+      const manifest = readManifest(staging)
+      if (manifest.name !== row.id) {
+        const bad = staging
+        staging = null
+        fs.rmSync(bad, { recursive: true, force: true })
+        throw new CliError(EXIT.FAIL, row.id + ': updated manifest name "' + manifest.name + '" no longer matches the registered id')
+      }
+      const dest = cloneDir(H, row.id)
+      console.log('  backed up ' + dest + ' -> ' + moveToBackups(H, dest, row.id))
+      fs.renameSync(staging, dest)
+      staging = null
+      row.ref = cloned.ref
+      row.resolvedSha = cloned.resolvedSha
+      updated += 1
+      console.log('  updated       ' + row.id + ' -> ' + row.ref + ' @ ' + shortSha(row.resolvedSha))
+    }
+
+    if (updated) {
+      writeRegistry(H, reg)
+      syncAll(H, false)
+    }
+    if (opts.check) {
+      console.log('update --check: ' + pending + ' pending')
+      return pending ? EXIT.FAIL : EXIT.OK
+    }
+    console.log('update: ' + updated + ' updated')
+    return EXIT.OK
+  } finally {
+    if (staging) fs.rmSync(staging, { recursive: true, force: true })
     releaseLock()
   }
 }
@@ -1827,9 +2037,11 @@ const HELP = [
   'Usage',
   '  img2 install [--from <localpath>] [--home <dir>] [--yes] [--migrate-legacy]',
   '  img2 add <org/repo | url> [--ref <tag|branch>] [--force] [--allow-any-source]',
+  '  img2 add npm:<name>[@<version>] [--force] [--allow-any-source]',
   '  img2 add --link <localpath> [--force]',
   '  img2 remove <id>',
   '  img2 list',
+  '  img2 update [<id>] [--check] [--yes] [--allow-any-source]',
   '  img2 doctor [--json]',
   '  img2 sync [--check]',
   '  img2 capabilities [--from-kind <kind>] [--to-kind <kind>] [--plugin <id>] [--json]',
@@ -1842,8 +2054,8 @@ const HELP = [
   '  --ref <ref>          pin a plugin to a tag or branch (default: newest semver tag)',
   '  --link <path>        register a local plugin checkout via symlink (no clone)',
   '  --force              replace an existing registered plugin',
-  '  --allow-any-source   accept a source outside the ' + DEFAULT_ORG + '/* org',
-  '  --check              sync: verify generated artifacts without writing',
+  '  --allow-any-source   accept a source outside the ' + DEFAULT_ORG + '/* org (or @' + DEFAULT_ORG + ' npm scope)',
+  '  --check              sync: verify generated artifacts without writing; update: report pending updates without fetching',
   '  --from-kind <kind>   capabilities: the edge\'s source kind',
   '  --to-kind <kind>     capabilities: the edge\'s destination kind',
   '  --plugin <id>        capabilities: disambiguate to one named provider',
@@ -1912,6 +2124,7 @@ const COMMANDS = {
   add: (opts, args) => cmdAdd(opts, args[0]),
   remove: (opts, args) => cmdRemove(opts, args[0]),
   list: (opts) => cmdList(opts),
+  update: (opts, args) => cmdUpdate(opts, args),
   doctor: (opts) => cmdDoctor(opts),
   sync: (opts) => cmdSync(opts),
   capabilities: (opts) => cmdCapabilities(opts),
