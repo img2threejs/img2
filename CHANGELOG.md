@@ -33,9 +33,14 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   directory wherever they occur under `docs/`/`img2_core/` — `npm pack` does not consult
   `.gitignore` for a directory explicitly listed in `files`, so without this a local dev artifact
   left in the working tree would have shipped in the published tarball.
-- CI: `.github/workflows/ci.yml` runs the full test suite on every PR and push to `main`;
-  `.github/workflows/publish.yml` publishes `img2` to npm via trusted publishing (OIDC) on a
-  `vX.Y.Z` tag push.
+- CI: `.github/workflows/ci.yml` and `publish.yml` call the org's shared `img2threejs/ci-workflows`
+  reusable workflows (pinned by commit SHA, per org policy) instead of carrying inline workflow
+  logic — `ci.yml` runs the full test suite on every PR and push to `main`; `publish.yml`
+  publishes `img2` to npm (via an `NPM_TOKEN` secret, not OIDC trusted publishing) on a `vX.Y.Z`
+  tag push, after validating the tag against `package.json` and refusing install-time lifecycle
+  scripts. Both are pinned to a feature branch of `ci-workflows` pending
+  [img2threejs/ci-workflows#2](https://github.com/img2threejs/ci-workflows/pull/2); re-pin once
+  it merges.
 
 ## [0.2.3] — 2026-09-03
 
