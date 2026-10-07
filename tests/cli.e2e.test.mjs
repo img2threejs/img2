@@ -216,8 +216,10 @@ function makeSandbox(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const HOME = path.join(root, 'home')
   fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true })
+  const localBin = path.join(HOME, '.local', 'bin')
+  fs.mkdirSync(localBin, { recursive: true })
   const H = path.join(HOME, '.img2')
-  const env = { PATH: process.env.PATH, HOME, IMG2_HOME: H, GIT_TERMINAL_PROMPT: '0' }
+  const env = { PATH: localBin + path.delimiter + process.env.PATH, HOME, IMG2_HOME: H, GIT_TERMINAL_PROMPT: '0' }
   return { root, HOME, H, env }
 }
 

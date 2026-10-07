@@ -55,21 +55,30 @@ what is true.
 
 ## Publishing
 
-The harness itself ships to npm as the `img2` package. `.github/workflows/ci.yml` and
-`publish.yml` are thin callers into the org's shared `img2threejs/ci-workflows` repo, pinned by
-full commit SHA (org policy — never a branch or tag ref); re-pin to `ci-workflows`'s merged
-`main` SHA once [img2threejs/ci-workflows#2](https://github.com/img2threejs/ci-workflows/pull/2)
-lands, and again whenever a reusable workflow there changes in a way this repo needs.
+The harness itself ships to npm as the scoped package `@img2threejs/img2` (the unscoped
+name `img2` is too similar to an existing `img-2` and is npm-refused). `.github/workflows/ci.yml`
+and `publish.yml` call reviewed shared workflows pinned by full commit SHA, never a moving
+branch or tag. Update the pin only after reviewing the shared workflow change.
 
-To release: bump `package.json`'s `version` and add a `CHANGELOG.md` entry, tag `vX.Y.Z`
-matching it, and push the tag. The reusable `npm-publish.yml` workflow validates the tag against
-`package.json`, refuses `preinstall`/`install`/`postinstall`/`prepare` lifecycle scripts, runs
-`npm test` in a job with no access to the npm token, then publishes with
-`npm publish --provenance --access public`, authenticated by the **`NPM_TOKEN`** secret (a
-granular npm automation token — this is a plain token, not OIDC trusted publishing). It no-ops if
-the tagged version is already on the registry, and a prerelease tag (`v0.3.0-beta.1`) publishes
-under its prerelease dist-tag (`beta`).
+To release: bump `package.json`, update `CHANGELOG.md`, commit reviewed files, and push a
+matching annotated `vX.Y.Z` tag. The OIDC workflow validates the version, installs dependencies
+without lifecycle scripts, runs `npm test` without publish permission, packs that tested tree,
+and publishes the exact artifact. Only the separate publish job can obtain an OIDC credential.
+An existing version must match the tested bytes; rerunning it does not reset its dist-tag.
+Stable versions publish to `latest`, prereleases such as `v0.3.0-beta.1` to `beta`.
 
-`NPM_TOKEN` must exist as an org or repo Actions secret before the first tag push — the reusable
-workflow publishes straight from CI, so unlike a trusted-publishing setup there is no separate
-manual first-publish step once the token is in place.
+The first version of a new package must be published manually before npm allows trusted
+publisher configuration. `@img2threejs/img2@0.2.3` is the bootstrap package.
+Configure the GitHub caller workflow **filename** with npm >=11.15, package write permission
+and account-level 2FA:
+
+```bash
+npm exec --yes --package=npm@11 -- npm trust github @img2threejs/img2 \
+  --repo img2threejs/img2 --file publish.yml --allow-publish --yes
+```
+
+The npm website settings are equivalent. Actions use no npm write token or token fallback.
+Publishing runs on GitHub-hosted Node 24/npm >=11.5.1; CLI consumers still support Node >=18.
+Provenance requires a public source repository and public npm package. A private-source
+plugin's generated CLI workflow must use `provenance: false`; this workflow publishes
+public npm packages only.

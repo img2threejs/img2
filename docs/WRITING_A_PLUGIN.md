@@ -13,9 +13,23 @@ step, and what to do when you want to override a gate.
 
 ## 0. Prerequisites
 
+- Node.js ≥ 18
+- Git
+- Python 3.10+ (the harness ships `img2_core/` as stdlib-only Python)
+
+Bootstrap the harness once per machine:
+
 ```bash
-npx github:img2threejs/img2 install     # once per machine
+npx @img2threejs/img2 install     # once per machine
 ```
+
+The harness publishes to npm as the scoped package `@img2threejs/img2`. There is no unscoped
+fallback: depending on `img2` resolves a different package on npm and will not satisfy the
+wrapper's import.
+
+Supported agent hosts: **Claude Code** (`~/.claude`), **Codex** (`~/.codex`), **OpenCode**
+(`$XDG_CONFIG_HOME/opencode`). Other hosts are not supported; check `img2 doctor --json` for the
+current host detection on your machine.
 
 ## 1. Repo layout
 
@@ -160,7 +174,56 @@ img2 remove glb2threejs                     # when done
 3. Repos outside the `img2threejs` org install only with `--allow-any-source` — that is
    the trust boundary, not a bug. If the plugin belongs in the org, propose a transfer.
 
-## 10. Pre-submit checklist (mirrors `img2 doctor`)
+## 10. Plugin CLI wrapper (optional)
+
+A plugin can ship a thin CLI wrapper alongside the repo. End users run e.g.
+`npx img2-glb2threejs install` and the wrapper bootstraps the harness, registers the plugin,
+and links it into every detected host — they never have to install the harness first.
+
+Generate the wrapper inside this repo:
+
+```bash
+npx --package=@img2threejs/img2 create-img2-plugin-cli \
+    --directory . \
+    --name img2-glb2threejs \
+    --source img2threejs/plugin-glb2threejs \
+    --workflow-ref 7ef63107b39f77df3a11062a1a0a2245f500921c
+```
+
+The generator writes:
+
+- `cli/package.json` — installer package, exact dependency on the generator's harness version
+- `cli/bin/cli.mjs` — imports `runPluginCli` from `@img2threejs/img2/plugin-cli`
+- `cli/tests/cli.test.mjs` — consumer-behavior smoke test (no network, no npm installs)
+- `cli/README.md` — wrapper-local reference
+- `cli/LICENSE` and `cli/.gitignore` — public installer license and local dependency/credential exclusions
+- `.github/workflows/cli-publish.yml` — calls the org's shared `npm-publish.yml`,
+  pinned by SHA, OIDC trusted publishing (no `NPM_TOKEN` secret), `cli-vX.Y.Z` tag prefix
+- `CLI_QUICKSTART.md` — root pointer for end users
+
+Flags worth knowing:
+
+- `--ref vX.Y.Z` pins the wrapper's install behaviour to a specific plugin tag.
+- `--cli-version 0.2.0` changes the wrapper version (default `0.1.0`).
+- `--private-repo` disables provenance for a private GitHub source repository, even though
+  its npm installer is public.
+
+CLI releases use the **`cli-v` prefix** (e.g. `cli-v0.1.0`); plugin source releases keep the
+plain **`v` prefix** (e.g. `v0.2.0`). The two never conflict.
+
+For a **private** source, configure an authorized HTTPS Git credential helper:
+`gh auth login` followed by `gh auth setup-git` is one supported setup. `GITHUB_TOKEN`
+alone or an SSH agent does not configure credentials for the installer's HTTPS URL.
+Hermes is not supported by this harness.
+
+Read the generated `CLI_QUICKSTART.md`: install CLI dependencies, run its isolated tests,
+review `npm pack --dry-run`, manually publish the first version from `cli/`, then configure
+`npm trust github <package> --repo <org/repo> --file cli-publish.yml --allow-publish`.
+Subsequent matching `cli-vX.Y.Z` tags publish through OIDC. Never publish the plugin root.
+The tarball contains only the installer and public package README/license; plugin assets
+stay in the Git repository.
+
+## 11. Pre-submit checklist (mirrors `img2 doctor`)
 
 - [ ] `plugin.json` schema 1, honest `requires`
 - [ ] SKILL.md description written as a trigger; commands use `--workspace .`

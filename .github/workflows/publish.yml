@@ -1,21 +1,33 @@
 name: publish
+# Shared release implementation: reviewed npm OIDC artifact publishing.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.2.4)
+        required: true
+        type: string
+
 permissions:
   contents: read
+
 jobs:
   publish:
-    # ci-workflows npm-publish (feat/reusable-npm-publish); re-pin to the merged main SHA once img2threejs/ci-workflows#2 lands
-    uses: img2threejs/ci-workflows/.github/workflows/npm-publish.yml@27da7a68505591492cb4ef7358968890c6e39844
+    # Reusable workflows CANNOT escalate a caller-level permission block. Grant
+    # `id-token: write` here at the reusable-call job level so npm OIDC can mint the
+    # publish token. The shared workflow narrows the build job to `contents: read`.
     permissions:
       contents: read
       id-token: write
+    uses: img2threejs/ci-workflows/.github/workflows/npm-publish.yml@7ef63107b39f77df3a11062a1a0a2245f500921c
     with:
-      tag: ${{ github.ref_name }}
+      tag: ${{ inputs.tag || github.ref_name }}
+      tag-prefix: 'v'
       version-file: package.json
+      package-directory: '.'
       node-version: '24'
       python-version: '3.12'
       test-command: npm test
-    secrets:
-      npm-token: ${{ secrets.NPM_TOKEN }}
+      provenance: 'true'

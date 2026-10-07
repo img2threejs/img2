@@ -24,7 +24,7 @@ Ecosystem discovery: GitHub topic `img2threejs-plugin`.
 ## Quickstart
 
 ```bash
-npx github:img2threejs/img2 install     # $IMG2_HOME (~/.img2), harness checkout, host settings,
+npx @img2threejs/img2 install           # $IMG2_HOME (~/.img2), harness checkout, host settings,
                                         # and an `img2` launcher linked into a writable PATH dir
                                         # (~/.local/bin, /opt/homebrew/bin, or /usr/local/bin —
                                         # if none qualifies, install prints an alias to use instead)
@@ -37,7 +37,47 @@ img2 sync --check                       # generated index == manifests (CI-able)
 img2 remove img2glb                     # unlink every host, move clone to backups, drop the row
 ```
 
-Every command also runs without the launcher: `npx github:img2threejs/img2 <command>`.
+Every command also runs without the launcher: `npx @img2threejs/img2 <command>`.
+
+The harness publishes to npm as the scoped package `@img2threejs/img2`. There is no unscoped
+fallback: a wrapper that depends on `img2` resolves a different package on npm and will not
+satisfy the wrapper's `@img2threejs/img2/plugin-cli` import.
+
+## Plugin CLI wrapper
+
+A plugin's author can ship a CLI wrapper alongside the plugin repo. The wrapper lives in the
+plugin's `cli/` subdirectory, is published to npm under a name like `img2-<plugin-id>`, and lets
+end users install/update/remove the plugin without the harness on their machine first:
+
+```bash
+npx --package=@img2threejs/img2 create-img2-plugin-cli \
+    --directory ~/src/plugin-foo \
+    --name img2-foo \
+    --source img2threejs/plugin-foo \
+    --workflow-ref 7ef63107b39f77df3a11062a1a0a2245f500921c
+```
+
+The generator creates an installer-only `cli/` package, isolated-home regression tests,
+public CLI README/license, `.gitignore`, a SHA-pinned `.github/workflows/cli-publish.yml`,
+and a complete root `CLI_QUICKSTART.md`. For a private GitHub source, add `--private-repo`.
+End users run `npx img2-foo install --dry-run`, then `npx img2-foo install --yes`.
+The package ships only its executable, package metadata and public README/license—not the
+plugin repository's README, tools or assets. The shared runtime is pinned to the generator's
+exact harness version.
+
+See [`docs/WRITING_A_PLUGIN.md`](docs/WRITING_A_PLUGIN.md) and the
+[generated quick-start template](templates/plugin-cli/CLI_QUICKSTART.md).
+
+## Prerequisites
+
+- Node.js ≥ 18
+- Git (the harness uses it for clone/checkout)
+- Python 3.10+ (the bundled `img2_core/` is stdlib-only Python)
+
+Detected agent hosts: **Claude Code** (`~/.claude`), **Codex** (`~/.codex`), and
+**OpenCode** (`$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`). The harness does not
+support any other host; check `img2 doctor --json` for the current host detection on your
+machine.
 
 ## Asking which provider serves a capability
 

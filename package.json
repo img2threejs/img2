@@ -1,11 +1,17 @@
 {
-  "name": "img2",
-  "version": "0.2.3",
+  "name": "@img2threejs/img2",
+  "version": "0.2.4",
   "description": "Plugin harness for the img2 ecosystem: everything is a plugin.",
   "license": "Apache-2.0",
   "type": "module",
+  "main": "bin/img2.mjs",
   "bin": {
-    "img2": "bin/img2.mjs"
+    "img2": "bin/img2.mjs",
+    "create-img2-plugin-cli": "bin/create-plugin-cli.mjs"
+  },
+  "exports": {
+    ".": "./bin/img2.mjs",
+    "./plugin-cli": "./bin/plugin-cli.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -14,6 +20,7 @@
     "bin",
     "img2_core",
     "docs",
+    "templates",
     "!**/__pycache__/**",
     "!**/*.pyc",
     "!**/.omc/**"

@@ -1356,6 +1356,9 @@ async function cmdAdd(opts, spec) {
       row = { id: manifest.name, repo: cloned.label, ref: cloned.ref, resolvedSha: cloned.resolvedSha, addedAt: new Date().toISOString() }
     }
     const id = row.id
+    if (opts.plugin && opts.plugin !== id) {
+      throw new CliError(EXIT.REFUSED, 'source plugin "' + id + '" does not match expected "' + opts.plugin + '"')
+    }
 
     const reg = readRegistry(H)
     const existing = findRow(reg, id)
@@ -2056,7 +2059,7 @@ const HELP = [
   '',
   'Usage',
   '  img2 install [--from <localpath>] [--home <dir>] [--yes] [--migrate-legacy]',
-  '  img2 add <org/repo | url> [--ref <tag|branch>] [--force] [--allow-any-source]',
+  '  img2 add <org/repo | url> [--ref <tag|branch>] [--force] [--allow-any-source] [--plugin <expected-id>]',
   '  img2 add npm:<name>[@<version>] [--force] [--allow-any-source]',
   '  img2 add --link <localpath> [--force]',
   '  img2 remove <id>',
@@ -2078,7 +2081,7 @@ const HELP = [
   '  --check              sync: verify generated artifacts without writing; update: report pending updates without fetching',
   '  --from-kind <kind>   capabilities: the edge\'s source kind',
   '  --to-kind <kind>     capabilities: the edge\'s destination kind',
-  '  --plugin <id>        capabilities: disambiguate to one named provider',
+  '  --plugin <id>        add: require this source identity; capabilities: select a provider',
   '  --json               version/doctor: emit machine-readable output; capabilities: implied',
   '',
   'Environment',

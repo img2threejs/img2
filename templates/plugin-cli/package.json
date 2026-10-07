@@ -1,0 +1,32 @@
+{
+  "name": "{{CLI_NAME}}",
+  "version": "{{CLI_VERSION}}",
+  "description": "Plugin CLI wrapper for img2 plugin {{PLUGIN_ID}}",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "{{CLI_NAME}}": "bin/cli.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/cli.mjs"
+  ],
+  "scripts": {
+    "test": "node --test tests/cli.test.mjs"
+  },
+  "dependencies": {
+    "@img2threejs/img2": "{{HARNESS_VERSION}}"
+  },
+  "img2Plugin": {{IMG2_PLUGIN}},
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/{{SOURCE}}.git",
+    "directory": "cli"
+  }
+}

@@ -1,0 +1,21 @@
+name: cli-publish
+on:
+  push:
+    tags: ['cli-v*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    uses: img2threejs/ci-workflows/.github/workflows/npm-publish.yml@{{WORKFLOW_SHA}}
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      tag-prefix: 'cli-v'
+      tag: ${{ github.ref_name }}
+      package-directory: 'cli'
+      version-file: 'cli/package.json'
+      node-version: '24'
+      python-version: '3.12'
+      test-command: 'npm test'
+      provenance: '{{PROVENANCE}}'

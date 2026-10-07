@@ -9,38 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
-## [Unreleased]
+## [0.2.4] — 2026-10-07
 
 ### Added
 
-- **`npm:` plugin source.** `img2 add npm:<name>[@<version>]` fetches a plugin from npm instead of
-  git — `npm view` resolves the version and `dist.integrity`, `npm pack` fetches the tarball, and
-  the harness extracts it itself (stripping the tarball's `package/` prefix) into the same
-  staging → validate → link flow git installs already go through. Default trust is the
-  `@img2threejs` scope, mirroring the `img2threejs/*` git org; anything else needs
-  `--allow-any-source`. The registry row keeps its four keys: `repo` becomes `npm:<name>`, `ref` is
-  the resolved version, `resolvedSha` is npm's `dist.integrity` (a `sha512-…` string, not a git SHA).
-- **`img2 update [<id>] [--check]`.** Re-checks every registered plugin's source for something
-  newer — the newest npm version or the newest reachable git tag — and re-fetches it in place if
-  so, backing up the previous clone. A `link:` row is a local dev checkout and is left alone.
-  `--check` reports what is pending without fetching anything, exiting non-zero if there is any.
-- Audited every git-specific assumption doctor/list/add made about a plugin directory: the
-  `.gitignore` covers `_img2_local.py` check now only runs when the plugin dir is actually a git
-  checkout (an npm-fetched or bare `--link`'d directory has no `.git` and no such hazard), and the
-  short-SHA display in `img2 add`/`img2 list` now shows a useful slice of an npm `sha512-…`
-  integrity string instead of just the literal `sha512-` prefix.
-- `package.json`'s `files` field now excludes `__pycache__/`, `*.pyc`, and any stray `.omc/`
-  directory wherever they occur under `docs/`/`img2_core/` — `npm pack` does not consult
-  `.gitignore` for a directory explicitly listed in `files`, so without this a local dev artifact
-  left in the working tree would have shipped in the published tarball.
-- CI: `.github/workflows/ci.yml` and `publish.yml` call the org's shared `img2threejs/ci-workflows`
-  reusable workflows (pinned by commit SHA, per org policy) instead of carrying inline workflow
-  logic — `ci.yml` runs the full test suite on every PR and push to `main`; `publish.yml`
-  publishes `img2` to npm (via an `NPM_TOKEN` secret, not OIDC trusted publishing) on a `vX.Y.Z`
-  tag push, after validating the tag against `package.json` and refusing install-time lifecycle
-  scripts. Both are pinned to a feature branch of `ci-workflows` pending
-  [img2threejs/ci-workflows#2](https://github.com/img2threejs/ci-workflows/pull/2); re-pin once
-  it merges.
+- `npm:` plugin sources: `img2 add npm:<name>[@<version>]` resolves the version and
+  `dist.integrity`, fetches the tarball, then uses the same staging/validation/link flow as Git.
+  The default trusted npm scope is `@img2threejs`; other sources require `--allow-any-source`.
+  Registry rows store `repo: npm:<name>`, the version in `ref`, and integrity in `resolvedSha`.
+- `img2 update [<id>] [--check]`: checks each registered source for the latest version,
+  backs up and replaces managed clones, and leaves local links alone.
+  `--check` reports pending updates without cloning, with a nonzero exit when updates exist.
+- `create-img2-plugin-cli`: creates a standalone `cli/` package for an existing plugin,
+  with an exact harness dependency, isolated regression tests, public README/license,
+  local ignores, a SHA-pinned OIDC release workflow, and a complete `CLI_QUICKSTART.md`.
+  Existing output and symlinked workflow parents are refused.
+- `@img2threejs/img2/plugin-cli` exports `runPluginCli({packageUrl, argv})`.
+  Install/update/remove delegate to the existing harness, protect local links and unrelated
+  sources, and require explicit consent. Repeated matching installs are read-only.
+  Install supports immutable ref overrides and an offline, no-write `--dry-run`.
+  Doctor audits the full harness; CLI releases do not claim reconstruction acceptance.
+- `img2 add --plugin <expected-id>` refuses a fetched plugin with another identity before
+  modifying its registry, protecting wrappers that use `--force`.
+
+### Changed
+
+- npm package name is `@img2threejs/img2`; the executable remains `img2`.
+  npm refused unscoped `img2` as too similar to `img-2`. No unscoped dependency alias is used.
+  The package root API remains available, with the new `./plugin-cli` export.
+  Version `0.2.3` was manually published as the scoped bootstrap package.
+- Release publishing uses reviewed full-SHA-pinned shared workflows and npm trusted
+  publishing (OIDC), without a write-token fallback. The unprivileged job tests and packs
+  one tree; the publish job validates and publishes that exact artifact.
+  Existing registry versions must match the artifact's SHA512 and downloaded bytes.
+- Plugin CLI tags use `cli-vX.Y.Z`, independently of plugin source tags `vX.Y.Z`.
+  Private-source installers use `provenance: false` and still require authorized Git access.
+- npm tarballs exclude Python bytecode/cache and stray `.omc` state.
+  Doctor's Git ignore check applies only to Git checkouts; npm integrity display no longer
+  truncates to the algorithm prefix.
+
+### Fixed
+
+- CLI arguments are validated before side effects; corrupt registries are surfaced rather
+  than reset. Explicit refs override metadata, and failed bootstrap never proceeds to add.
+- Test sandboxes create their own launcher directory so full-suite runs do not write to
+  `/opt/homebrew/bin` or `/usr/local/bin`.
 
 ## [0.2.3] — 2026-09-03
 
@@ -148,6 +161,7 @@ plugin registry, the workspace state envelope, the gate runner, and the contract
   the lock across the whole read-modify-write, and `tests/python/test_state.py` demonstrably catches the
   bug it guards against.
 
+[0.2.4]: https://github.com/img2threejs/img2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/img2threejs/img2/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/img2threejs/img2/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/img2threejs/img2/compare/v0.2.0...v0.2.1
