@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
+## [0.2.5] — 2026-10-07
+
+### Changed
+
+- Plugin installation output now uses clear phase headings, semantic status labels, source/ref/pin
+  details, per-host link results, backup paths and a shell-quoted next command.
+- Shared plugin wrappers present offline previews and already-registered installs consistently.
+  Already-registered output explicitly separates registration from a successful health audit.
+- Color is terminal-only, respects `NO_COLOR` and `TERM=dumb`, and is decided per output stream.
+  Narrow terminals stack fields and wrap messages/commands; piped output remains plain.
+  Terminal control characters in displayed values are escaped. JSON output, consent and exit
+  codes retain their existing behavior; no dependencies or simulated progress were added.
+
 ## [0.2.4] — 2026-10-07
 
 ### Added
@@ -161,6 +174,7 @@ plugin registry, the workspace state envelope, the gate runner, and the contract
   the lock across the whole read-modify-write, and `tests/python/test_state.py` demonstrably catches the
   bug it guards against.
 
+[0.2.5]: https://github.com/img2threejs/img2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/img2threejs/img2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/img2threejs/img2/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/img2threejs/img2/compare/v0.2.1...v0.2.2

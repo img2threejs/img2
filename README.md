@@ -27,7 +27,7 @@ Ecosystem discovery: GitHub topic `img2threejs-plugin`.
 npx @img2threejs/img2 install           # $IMG2_HOME (~/.img2), harness checkout, host settings,
                                         # and an `img2` launcher linked into a writable PATH dir
                                         # (~/.local/bin, /opt/homebrew/bin, or /usr/local/bin —
-                                        # if none qualifies, install prints an alias to use instead)
+                                        # if none qualifies, use npx instead)
 img2 add img2threejs/plugin-img2glb     # clone @ newest tag, pin SHA, link ~/.claude/skills/img2-img2glb
 img2 add npm:@img2threejs/plugin-cs2    # npm instead of git: fetch @ newest version, pin dist.integrity
 img2 list                               # registered plugins: id, version, ref, sha
@@ -38,6 +38,22 @@ img2 remove img2glb                     # unlink every host, move clone to backu
 ```
 
 Every command also runs without the launcher: `npx @img2threejs/img2 <command>`.
+
+### Install output
+
+`install` and `add` show numbered phases, actual host-link outcomes, the selected ref/pin,
+backup locations when replacing an installation, and a copyable `doctor` command on success.
+Plugin CLI wrappers use the same presentation for offline previews and already-registered installs.
+Registration alone is not a health check; run `doctor` for that.
+
+Color is enabled only on the corresponding terminal stream. Set `NO_COLOR=1` to disable it;
+`TERM=dumb` is also plain. Redirected/piped output stays uncolored even with `FORCE_COLOR`.
+Narrow terminals stack fields and wrap messages without truncating paths or refs.
+Machine-readable `--json` output and exit codes are unchanged.
+
+Use `npx @img2threejs/img2@latest <command>` to pick up installer updates.
+`install` keeps an existing harness checkout; it does not automatically upgrade an older
+`img2` launcher pointing into that checkout.
 
 The harness publishes to npm as the scoped package `@img2threejs/img2`. There is no unscoped
 fallback: a wrapper that depends on `img2` resolves a different package on npm and will not

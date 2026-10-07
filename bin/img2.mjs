@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { ui } from './ui.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
@@ -547,21 +548,21 @@ function ensureLauncher(H) {
       st = fs.lstatSync(link)
     } catch {}
     if (st && !(st.isSymbolicLink() && fs.readlinkSync(link).endsWith(mineSuffix))) {
-      console.log('  launcher  ' + link + ' exists and is not ours; skipped')
+      ui.warn('Launcher already exists and is not owned by img2; kept ' + link)
       continue
     }
     try {
       if (st) fs.unlinkSync(link)
       fs.symlinkSync(target, link)
-      console.log('  launcher  ' + link + ' -> ' + target)
+      ui.ok('Launcher linked')
+      ui.detail('Path', ui.path(link))
       return
     } catch {
       continue
     }
   }
-  console.log('  launcher  no writable dir on PATH among ~/.local/bin, /opt/homebrew/bin, /usr/local/bin;')
-  console.log('            add one, or use: alias img2="node ' + target + '"')
-  console.log('            (every command also works as: npx github:img2threejs/img2 <command>)')
+  ui.warn('No writable launcher directory on PATH; use npx instead')
+  ui.detail('Command', 'npx @img2threejs/img2 <command>')
 }
 
 // ---------------------------------------------------------------- rows files (steps/gates)
@@ -681,7 +682,7 @@ function syncAll(H, check) {
   }
   fs.mkdirSync(generatedDir(H), { recursive: true })
   for (const t of drift) fs.writeFileSync(t.file, t.want)
-  console.log('synced ' + reg.plugins.length + ' plugin(s); ' + drift.length + ' file(s) updated')
+  ui.ok('Synced ' + reg.plugins.length + ' plugin(s); ' + drift.length + ' file(s) updated')
 }
 
 // ---------------------------------------------------------------- static checks
@@ -1130,7 +1131,7 @@ async function confirmOrThrow(prompt) {
           resolve(null)
         }
       })
-      rl.question(prompt + ' [y/N] ', (a) => {
+      rl.question(ui.prompt(prompt), (a) => {
         settled = true
         resolve(a)
       })
@@ -1145,7 +1146,7 @@ async function confirmOrThrow(prompt) {
 
 export async function confirmOutOfOrgSource(url, defaultOrg, opts) {
   if (defaultOrg) return
-  console.log('about to clone and link a non-' + DEFAULT_ORG + ' source: ' + url)
+  ui.warn('About to clone and link a non-' + DEFAULT_ORG + ' source: ' + url)
   if (opts.yes) return
   await confirmOrThrow('Proceed?')
 }
@@ -1169,9 +1170,12 @@ async function cmdInstall(opts) {
     )
   }
 
-  console.log('img2 home : ' + H)
-  console.log('harness   : ' + (opts.from ? path.resolve(opts.from) : HARNESS_REPO_URL))
+  ui.heading('Set up harness')
+  ui.detail('Home', ui.path(H))
+  ui.detail('Source', opts.from ? ui.path(path.resolve(opts.from)) : HARNESS_REPO_URL)
   if (!opts.yes) await confirmOrThrow('Proceed?')
+
+  ui.step(1, 3, 'Prepare installation home')
 
   fs.mkdirSync(H, { recursive: true })
   acquireLock(H)
@@ -1182,39 +1186,46 @@ async function cmdInstall(opts) {
 
     if (legacyExists) {
       const dest = moveToBackups(H, legacyRepo, 'legacy-img2threejs-repo')
-      console.log('  migrated  ' + legacyRepo + ' -> ' + dest)
+      ui.info('Legacy checkout moved to backup')
+      ui.detail('Backup', ui.path(dest))
       for (const key of Object.keys(HOSTS)) {
         const t = path.join(HOSTS[key].skills(), LEGACY_LINK_NAME)
         const c = classifyTarget(t)
         if (c.state === 'symlink' && c.dangling && (c.resolved === legacyHome || c.resolved.startsWith(legacyHome + path.sep))) {
           fs.unlinkSync(t)
-          console.log('  removed dangling legacy link ' + t)
+          ui.info('Removed dangling legacy link ' + ui.path(t))
         }
       }
     }
 
+    ui.ok('Registry and installation directories ready')
+    ui.step(2, 3, 'Prepare harness checkout')
     const hd = harnessDir(H)
     if (fs.existsSync(hd)) {
       if (!isGitRepo(hd)) {
         throw new CliError(EXIT.REFUSED, hd + ' exists but is not a git checkout; move it aside')
       }
-      console.log('  kept      existing harness checkout at ' + hd)
+      ui.ok('Kept existing harness checkout')
     } else {
       const src = opts.from ? path.resolve(opts.from) : HARNESS_REPO_URL
       if (opts.from && !fs.existsSync(src)) throw new CliError(EXIT.FAIL, '--from path does not exist: ' + src)
+      ui.info('Cloning harness')
       git(['clone', '-q', src, hd])
-      console.log('  cloned    ' + src + ' -> ' + hd)
+      ui.ok('Harness cloned')
     }
+    ui.detail('Checkout', ui.path(hd))
+    ui.step(3, 3, 'Configure agent access')
 
     ensureLauncher(H)
 
     if (fs.existsSync(HOSTS.claude.configRoot())) {
       const changed = mergeSettingsFile(HOSTS.claude.settings(), H)
-      console.log('  settings  ' + HOSTS.claude.settings() + (changed ? ' (added ' + H + ' to permissions.additionalDirectories)' : ' (already covers ' + H + ')'))
+      ui.ok(changed ? 'Claude Code permissions updated' : 'Claude Code permissions already cover this home')
+      ui.detail('Settings', ui.path(HOSTS.claude.settings()))
     } else {
-      console.log('  settings  claude not detected; nothing merged')
+      ui.info('Claude Code not detected; settings left unchanged')
     }
-    console.log('install: ok')
+    ui.ok('Harness ready')
     return EXIT.OK
   } finally {
     releaseLock()
@@ -1261,7 +1272,7 @@ async function resolveRefAndClone(H, spec, opts) {
     }
   } else {
     ref = git(['rev-parse', '--abbrev-ref', 'HEAD'], staging)
-    console.error('img2: warning: no semver tag reachable at ' + url + '; using HEAD of default branch "' + ref + '"')
+    ui.warn('No semver tag reachable at ' + url + '; using HEAD of default branch "' + ref + '"')
   }
   const resolvedSha = git(['rev-parse', 'HEAD'], staging)
   return { staging, label, ref, resolvedSha }
@@ -1338,6 +1349,10 @@ async function cmdAdd(opts, spec) {
     throw new CliError(EXIT.FAIL, 'no harness checkout at ' + harnessDir(H), 'run `img2 install` first')
   }
 
+  ui.heading('Install plugin')
+  ui.detail('Source', opts.link ? ui.path(path.resolve(opts.link)) : spec)
+  ui.detail('Home', ui.path(H))
+  ui.step(1, 3, opts.link ? 'Read and validate local plugin' : 'Fetch and validate plugin')
   acquireLock(H)
   let staging = null
   try {
@@ -1359,6 +1374,9 @@ async function cmdAdd(opts, spec) {
     if (opts.plugin && opts.plugin !== id) {
       throw new CliError(EXIT.REFUSED, 'source plugin "' + id + '" does not match expected "' + opts.plugin + '"')
     }
+    ui.ok('Validated ' + id + ' ' + manifest.version)
+    ui.detail('Ref', row.ref)
+    ui.detail('Pin', shortSha(row.resolvedSha))
 
     const reg = readRegistry(H)
     const existing = findRow(reg, id)
@@ -1382,17 +1400,22 @@ async function cmdAdd(opts, spec) {
       assertClaimable(path.join(HOSTS[key].skills(), linkName(id)), H)
     }
 
+    ui.step(2, 3, 'Register and link hosts')
     const dest = cloneDir(H, id)
     if (existing) {
       reg.plugins = reg.plugins.filter((r) => r.id !== id)
       if (classifyTarget(dest).state !== 'absent') {
-        console.log('  backed up ' + dest + ' -> ' + moveToBackups(H, dest, id))
+        const backup = moveToBackups(H, dest, id)
+        ui.info('Previous checkout moved to backup')
+        ui.detail('Backup', ui.path(backup))
       }
     } else if (classifyTarget(dest).state !== 'absent') {
       if (!opts.force) {
         throw new CliError(EXIT.REFUSED, dest + ' exists on disk but is not registered', 'pass --force to back it up and replace it')
       }
-      console.log('  backed up ' + dest + ' -> ' + moveToBackups(H, dest, id))
+      const backup = moveToBackups(H, dest, id)
+      ui.info('Existing directory moved to backup')
+      ui.detail('Backup', ui.path(backup))
     }
 
     if (opts.link) {
@@ -1406,17 +1429,20 @@ async function cmdAdd(opts, spec) {
     writeRegistry(H, reg)
 
     if (!hosts.length) {
-      console.error('img2: warning: no agent host detected (' + Object.keys(HOSTS).join(', ') + '); no skill links created')
+      ui.warn('No agent host detected (' + Object.values(HOSTS).map(host => host.label).join(', ') + '); no skill links created')
     }
     for (const key of hosts) {
       const target = path.join(HOSTS[key].skills(), linkName(id))
       const outcome = ensureLink(target, dest, H)
       recordReceipt(H, { host: key, plugin: id, target, canonical: dest })
-      console.log('  ' + outcome.padEnd(14) + target)
+      ui.ok(HOSTS[key].label + ' / ' + outcome)
+      ui.detail('Skill', ui.path(target))
     }
 
+    ui.step(3, 3, 'Sync generated files')
     syncAll(H, false)
-    console.log('added ' + id + ' ' + manifest.version + ' (' + row.ref + ' @ ' + shortSha(row.resolvedSha) + ')')
+    ui.ok('Installed ' + id + ' ' + manifest.version)
+    ui.next(['npx', '@img2threejs/img2', 'doctor', '--home', H])
     return EXIT.OK
   } finally {
     if (staging) fs.rmSync(staging, { recursive: true, force: true })
@@ -2202,8 +2228,7 @@ if (invokedDirectly) {
     .then((code) => process.exit(code))
     .catch((err) => {
       releaseLock()
-      console.error('img2: ' + err.message)
-      if (err.detail) console.error(err.detail)
+      ui.error('img2', err.message, err.detail)
       process.exit(err instanceof CliError ? err.code : EXIT.FAIL)
     })
 }

@@ -26,7 +26,7 @@ function fixture(t, { sourceId = 'demo', ref = 'v0.1.0' } = {}) {
   fs.mkdirSync(path.join(home, '.claude'))
   const harness = path.join(root, 'harness-source')
   fs.mkdirSync(path.join(harness, 'bin'), { recursive: true })
-  fs.copyFileSync(BIN, path.join(harness, 'bin', 'img2.mjs'))
+  fs.cpSync(path.join(ROOT, 'bin'), path.join(harness, 'bin'), { recursive: true })
   fs.cpSync(path.join(ROOT, 'img2_core'), path.join(harness, 'img2_core'), { recursive: true, filter: p => !p.includes('__pycache__') })
   fs.writeFileSync(path.join(harness, 'package.json'), fs.readFileSync(path.join(ROOT, 'package.json')))
   git(['init', '-qb', 'main'], harness)

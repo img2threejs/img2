@@ -4,6 +4,7 @@ import readline from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { CliError, EXIT, HOSTS, findRow, readRegistry, resolveImg2Home, resolveSource } from './img2.mjs'
+import { ui } from './ui.mjs'
 
 const REF = /^(?:[0-9a-f]{40}|v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/
 const SOURCE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
@@ -67,7 +68,7 @@ async function consent(message, yes) {
   if (!process.stdin.isTTY) throw new CliError(EXIT.NEEDS_INPUT, 'confirmation requires a terminal; pass --yes')
   const terminal = readline.createInterface({ input: process.stdin, output: process.stderr })
   try {
-    const answer = await terminal.question(message + ' [y/N] ')
+    const answer = await terminal.question(ui.prompt(message, process.stderr))
     if (!/^(y|yes)$/i.test(answer.trim())) throw new CliError(EXIT.REFUSED, 'cancelled; nothing changed')
   } finally {
     terminal.close()
@@ -114,12 +115,26 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
       if (row && !matches && !opts['--force']) throw new CliError(EXIT.REFUSED, 'different registered ref; use --force to replace this source')
       if (opts['--dry-run']) {
         const hosts = Object.values(HOSTS).filter(host => fs.existsSync(host.configRoot())).map(host => host.label)
-        process.stdout.write('dry-run: ' + (matches ? 'keep registered ' : 'install ') + meta.id + ' from ' + meta.source + (ref ? ' @ ' + ref : ' (newest semantic tag; HEAD if untagged)') + '\n')
-        process.stdout.write('harness home: ' + home + '; bootstrap if missing\nhosts: ' + (hosts.join(', ') || 'none detected') + '\n')
+        ui.heading('Preview plugin install')
+        ui.detail('Plugin', meta.id)
+        ui.detail('Source', meta.source)
+        ui.detail('Ref', ref || 'newest semantic tag; HEAD if untagged')
+        ui.detail('Home', ui.path(home))
+        ui.detail('Hosts', hosts.join(', ') || 'none detected')
+        ui.info(matches ? 'Already registered; this install would keep the current ref' : 'Preview only; no downloads, subprocesses or filesystem changes')
+        const next = matches
+          ? ['npx', pkg.name, 'doctor', '--home', home]
+          : ['npx', pkg.name, 'install', '--home', home, ...(opts['--ref'] ? ['--ref', ref] : []), ...(opts['--force'] ? ['--force'] : []), '--yes']
+        ui.next(next, matches ? 'Check the existing installation:' : 'Run when ready to install:')
         return EXIT.OK
       }
       if (matches) {
-        process.stdout.write(meta.id + ' is already registered; nothing changed\n')
+        ui.heading('Plugin already registered')
+        ui.detail('Plugin', meta.id)
+        ui.detail('Ref', row.ref)
+        ui.detail('Home', ui.path(home))
+        ui.info('Nothing changed; registration alone does not verify installation health')
+        ui.next(['npx', pkg.name, 'doctor', '--home', home], 'Check the existing installation:')
         return EXIT.OK
       }
       await consent('Install ' + meta.id + ' from ' + meta.source + ' into ' + home + '?', opts['--yes'])
@@ -151,8 +166,7 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
     await consent('Remove ' + meta.id + ' from ' + home + '?', opts['--yes'])
     return runHarness(['remove', meta.id, '--home', home])
   } catch (error) {
-    console.error('plugin-cli: ' + error.message)
-    if (error.detail) console.error(error.detail)
+    ui.error('plugin-cli', error.message, error.detail)
     return error instanceof CliError ? error.code : EXIT.FAIL
   }
 }

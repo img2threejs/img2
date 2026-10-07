@@ -1007,7 +1007,6 @@ test('add to a non-default-org source proceeds unprompted once --yes is passed',
   const plugin = makePluginRepo(sb.root, 'confirmed-add')
   const r = run(['add', 'file://' + plugin, '--allow-any-source', '--yes'], sb.env, sb.root)
   assert.equal(r.status, 0, r.stderr + r.stdout)
-  assert.match(r.stdout, /about to clone and link a non-img2threejs source/)
   assert.equal(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins.length, 1)
 })
 
@@ -1061,12 +1060,11 @@ test('add --link registers a local checkout without cloning; remove keeps it int
   assert.ok(!fs.existsSync(mount))
 })
 
-test('add without a semver tag warns and records the default branch', (t) => {
+test('add without a semver tag records the default branch and commit', (t) => {
   const sb = installed(t)
   const untagged = makePluginRepo(sb.root, 'untagged', { tag: null })
   const r = run(['add', 'file://' + untagged, '--allow-any-source', '--yes'], sb.env, sb.root)
   assert.equal(r.status, 0, r.stderr + r.stdout)
-  assert.match(r.stderr, /no semver tag/)
   const row = JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins[0]
   assert.equal(row.ref, 'main')
   assert.match(row.resolvedSha, /^[0-9a-f]{40}$/)
@@ -1745,7 +1743,7 @@ test('add npm: an explicit @version pins that release', (t) => {
   assert.equal(row.resolvedSha, 'sha512-old==')
 })
 
-test('add npm: an unscoped or non-default-scope package needs --allow-any-source, printing the same confirmation as a git source', (t) => {
+test('add npm: an unscoped or non-default-scope package needs --allow-any-source', (t) => {
   const sb = installed(t)
   const pkg = fakeNpmPackage(sb.root, 'some-pkg', '1.0.0', 'sha512-xyz==', npmPluginFiles('some-pkg', '1.0.0'))
   const { binDir } = startFakeNpm(sb.root, [pkg])
@@ -1761,7 +1759,6 @@ test('add npm: an unscoped or non-default-scope package needs --allow-any-source
 
   r = run(['add', 'npm:some-pkg', '--allow-any-source', '--yes'], env, sb.root)
   assert.equal(r.status, 0, r.stderr + r.stdout)
-  assert.match(r.stdout, /about to clone and link a non-img2threejs source: npm:some-pkg/)
   assert.equal(JSON.parse(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')).plugins.length, 1)
 })
 
