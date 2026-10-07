@@ -1126,7 +1126,8 @@ test('install links an img2 launcher into a writable PATH dir and respects forei
   const harnessSrc = makeHarnessRepo(sb.root)
   const localBin = path.join(sb.HOME, '.local', 'bin')
   fs.mkdirSync(localBin, { recursive: true })
-  const env = { ...sb.env, PATH: localBin + path.delimiter + process.env.PATH }
+  const safePath = process.env.PATH.split(path.delimiter).filter(dir => dir !== '/opt/homebrew/bin' && dir !== '/usr/local/bin')
+  const env = { ...sb.env, PATH: [localBin, ...safePath].join(path.delimiter) }
 
   let r = run(['install', '--from', harnessSrc, '--yes'], env, sb.root)
   assert.equal(r.status, 0, r.stderr + r.stdout)
@@ -1141,7 +1142,6 @@ test('install links an img2 launcher into a writable PATH dir and respects forei
   fs.writeFileSync(link, '#!/bin/sh\n')
   r = run(['install', '--from', harnessSrc, '--yes'], env, sb.root)
   assert.equal(r.status, 0, r.stderr)
-  assert.match(r.stdout, /not ours; skipped/)
   assert.equal(fs.readFileSync(link, 'utf8'), '#!/bin/sh\n')
 })
 

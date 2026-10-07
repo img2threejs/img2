@@ -52,8 +52,8 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 - CLI arguments are validated before side effects; corrupt registries are surfaced rather
   than reset. Explicit refs override metadata, and failed bootstrap never proceeds to add.
-- Test sandboxes create their own launcher directory so full-suite runs do not write to
-  `/opt/homebrew/bin` or `/usr/local/bin`.
+- Test sandboxes create their own launcher directory. The foreign-launcher case also removes
+  global launcher directories from PATH, so refusal cannot fall through into the user's bins.
 
 ## [0.2.3] — 2026-09-03
 
