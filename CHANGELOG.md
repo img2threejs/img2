@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
+## [0.3.0] — 2026-10-07
+
+### Added
+
+- `img2 plugins [--json]`: live discovery of officially announced plugins, with total/public/private
+  source counts, npm CLI count, descriptions and copyable install commands.
+- A maintained public `catalog.json`, fetched from GitHub without local installation or credentials.
+  Listing does not inspect registrations, acquire install locks or execute plugin code. `img2 list`
+  continues to show only locally registered plugins.
+- Whole-catalog validation and a ten-second network/body timeout. JSON failures report unknown
+  counts (`null`), not an empty ecosystem; invalid command arguments are refused before fetching.
+
 ## [0.2.5] — 2026-10-07
 
 ### Changed
@@ -174,6 +186,7 @@ plugin registry, the workspace state envelope, the gate runner, and the contract
   the lock across the whole read-modify-write, and `tests/python/test_state.py` demonstrably catches the
   bug it guards against.
 
+[0.3.0]: https://github.com/img2threejs/img2/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/img2threejs/img2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/img2threejs/img2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/img2threejs/img2/compare/v0.2.2...v0.2.3

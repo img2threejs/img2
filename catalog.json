@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-10-07",
+  "plugins": [
+    {
+      "id": "character",
+      "description": "Character rigging and animation: skeleton from a GLB, skin conditioning, clip measurement, action design, and a twelve-check rig gate.",
+      "source": "img2threejs/plugin-character",
+      "access": "public",
+      "npmCli": null
+    },
+    {
+      "id": "cs2",
+      "description": "Counter-Strike 2 weapon and glove skin reconstruction: intake contract, authoritative classification, finish/material recipes, and a blocking review gate.",
+      "source": "img2threejs/plugin-cs2",
+      "access": "public",
+      "npmCli": null
+    },
+    {
+      "id": "environment",
+      "description": "Install and manage the private img2 environment plugin through the img2 harness. Authorized GitHub access is required.",
+      "source": "img2threejs/plugin-environment",
+      "access": "private",
+      "npmCli": "img2-environment"
+    },
+    {
+      "id": "hello-cube",
+      "description": "Turn an image into a deterministic Three.js cube (contract exerciser)",
+      "source": "img2threejs/plugin-hello-cube",
+      "access": "public",
+      "npmCli": null
+    },
+    {
+      "id": "img2glb",
+      "description": "Turn an image into a GLB 3D mesh via the hosted TRELLIS space",
+      "source": "img2threejs/plugin-img2glb",
+      "access": "public",
+      "npmCli": null
+    }
+  ]
+}

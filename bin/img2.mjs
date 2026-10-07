@@ -8,6 +8,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { ui } from './ui.mjs'
+import { CATALOG_URL, getCatalog } from './catalog.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
@@ -2078,6 +2079,53 @@ async function cmdCapabilities(opts) {
   return finish(status, providers)
 }
 
+// Read-only discovery deliberately bypasses home, registry and install locks.
+async function cmdPlugins(opts, args) {
+  // Await writes because the dispatcher exits explicitly, including when stdout is a pipe.
+  const write = text => new Promise((resolve, reject) => {
+    process.stdout.write(text, err => err ? reject(err) : resolve())
+  })
+  try {
+    if (args.length) throw new CliError(EXIT.REFUSED, 'plugins takes no positional arguments')
+    for (const [key, value] of Object.entries(opts)) {
+      if (['help', 'showVersion', 'json'].includes(key) || value === null || value === false) continue
+      const flag = '--' + key.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase())
+      throw new CliError(EXIT.REFUSED, 'plugins does not support ' + flag)
+    }
+    const result = await getCatalog()
+    if (opts.json) {
+      await write(JSON.stringify(result) + '\n')
+    } else {
+      ui.heading('Available plugins')
+      ui.detail('Total', String(result.counts.total))
+      ui.detail('Public', String(result.counts.public))
+      ui.detail('Private', String(result.counts.private))
+      ui.detail('With npm CLI', String(result.counts.npmClis))
+      ui.detail('Updated', result.updatedAt)
+      ui.detail('Source', CATALOG_URL)
+      console.log()
+      ui.info('Official, publicly announced catalog. Use img2 list for plugins registered on this machine.')
+      if (result.counts.private) ui.info('Private sources require authorized Git access to the repository.')
+      for (const plugin of result.plugins) {
+        console.log()
+        ui.info(plugin.id + ' / ' + plugin.access + ' -- ' + plugin.description)
+        ui.detail('Source', plugin.source)
+        if (plugin.npmCli) ui.detail('npm CLI', plugin.npmCli)
+        ui.command(plugin.install)
+      }
+      await write('')
+    }
+    return EXIT.OK
+  } catch (error) {
+    if (!opts.json) throw error
+    await write(JSON.stringify({
+      version: 1, status: 'error', source: CATALOG_URL,
+      counts: null, plugins: [], error: error.message,
+    }) + '\n')
+    return error instanceof CliError ? error.code : EXIT.FAIL
+  }
+}
+
 // ---------------------------------------------------------------- entry
 
 const HELP = [
@@ -2090,6 +2138,7 @@ const HELP = [
   '  img2 add --link <localpath> [--force]',
   '  img2 remove <id>',
   '  img2 list',
+  '  img2 plugins [--json]',
   '  img2 update [<id>] [--check] [--yes] [--allow-any-source]',
   '  img2 doctor [--json]',
   '  img2 sync [--check]',
@@ -2108,7 +2157,7 @@ const HELP = [
   '  --from-kind <kind>   capabilities: the edge\'s source kind',
   '  --to-kind <kind>     capabilities: the edge\'s destination kind',
   '  --plugin <id>        add: require this source identity; capabilities: select a provider',
-  '  --json               version/doctor: emit machine-readable output; capabilities: implied',
+  '  --json               version/doctor: emit machine-readable output; capabilities: implied; plugins: emit the catalog envelope',
   '',
   'Environment',
   '  IMG2_HOME            harness home (default ~/.img2)',
@@ -2173,6 +2222,7 @@ const COMMANDS = {
   add: (opts, args) => cmdAdd(opts, args[0]),
   remove: (opts, args) => cmdRemove(opts, args[0]),
   list: (opts) => cmdList(opts),
+  plugins: (opts, args) => cmdPlugins(opts, args),
   update: (opts, args) => cmdUpdate(opts, args),
   doctor: (opts) => cmdDoctor(opts),
   sync: (opts) => cmdSync(opts),

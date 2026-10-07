@@ -72,11 +72,18 @@ export const ui = {
     line(process.stdout)
     line(process.stdout, '  ' + color(process.stdout, '1', 'Next'))
     flow(clean(message).split(' '))
-    const home = process.stdout.isTTY ? os.homedir() : null
-    const args = argv.map(value => clean(home && value.startsWith(home + path.sep)
-      ? '"$HOME"' + quote(value.slice(home.length))
-      : quote(value)))
-    flow(args, process.stdout.isTTY ? ' \\' : '')
+    printCommand(argv)
     line(process.stdout)
   },
+  command(argv) {
+    printCommand(argv)
+  },
+}
+
+function printCommand(argv) {
+  const home = process.stdout.isTTY ? os.homedir() : null
+  const args = argv.map(value => clean(home && value.startsWith(home + path.sep)
+    ? '"$HOME"' + quote(value.slice(home.length))
+    : quote(value)))
+  flow(args, process.stdout.isTTY ? ' \\' : '')
 }

@@ -19,7 +19,8 @@ the gate runner, and the contract.
 `docs/PLUGIN_ARCHITECTURE.md` is a generated single-page build of the wiki — read the wiki instead,
 unless you want the whole thing in one file.
 
-Ecosystem discovery: GitHub topic `img2threejs-plugin`.
+Ecosystem discovery: `img2 plugins` reads the [official catalog](catalog.json). GitHub topic
+`img2threejs-plugin` can also surface community repositories outside that catalog.
 
 ## Quickstart
 
@@ -28,8 +29,8 @@ npx @img2threejs/img2 install           # $IMG2_HOME (~/.img2), harness checkout
                                         # and an `img2` launcher linked into a writable PATH dir
                                         # (~/.local/bin, /opt/homebrew/bin, or /usr/local/bin —
                                         # if none qualifies, use npx instead)
-img2 add img2threejs/plugin-img2glb     # clone @ newest tag, pin SHA, link ~/.claude/skills/img2-img2glb
-img2 add npm:@img2threejs/plugin-cs2    # npm instead of git: fetch @ newest version, pin dist.integrity
+img2 plugins                            # available official plugins: count, source, install command
+img2 add img2threejs/plugin-img2glb      # clone @ newest tag, pin SHA, link ~/.claude/skills/img2-img2glb
 img2 list                               # registered plugins: id, version, ref, sha
 img2 update                             # re-check every row's source for a newer version, fetch it
 img2 doctor                             # fail-loud static audit of every row (--json for tooling)
@@ -38,6 +39,30 @@ img2 remove img2glb                     # unlink every host, move clone to backu
 ```
 
 Every command also runs without the launcher: `npx @img2threejs/img2 <command>`.
+
+### Discover plugins
+
+```bash
+npx --yes @img2threejs/img2@latest plugins
+npx --yes @img2threejs/img2@latest plugins --json
+```
+
+No harness installation, GitHub credentials or local registry is needed to list the catalog;
+only Node.js ≥ 18 and internet access. Each call fetches the maintained
+[`catalog.json`](https://raw.githubusercontent.com/img2threejs/img2/main/catalog.json) from GitHub
+with a ten-second request/body timeout. Catalog updates do not require a new npm release.
+
+The count covers officially announced plugins, including private sources with public installers;
+it is not npm search, a census of hidden repositories, or the locally registered set (`img2 list`).
+Each entry includes its description, GitHub source, source visibility, optional npm CLI and a
+copyable install command. Private-source installation still requires authorized repository access.
+Listing never installs plugins, reads registrations or creates a harness home.
+
+`--json` returns `counts` (`total`, `public`, `private`, `npmClis`) and `plugins`, with each
+`install` represented as an argv array. Fetch/validation errors exit 1 with `status: "error"` and
+`counts: null`, never a false zero. Invalid command arguments exit 2 before fetching.
+Maintainers add or update announced entries in the root `catalog.json` (schema 1); unpublished
+private repositories must remain outside the public catalog.
 
 ### Install output
 
