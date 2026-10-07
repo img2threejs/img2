@@ -16,19 +16,36 @@ const FLAGS = {
   version: ['--json'],
   help: [],
 }
-const HELP = `Usage: <plugin-cli> <command> [options]
-  install [--ref <vX.Y.Z|40-char SHA>] [--home <absolute path>] [--yes] [--force] [--dry-run]
-  update [--home <absolute path>] [--yes] [--check]
-  remove [--home <absolute path>] [--yes]
-  doctor [--home <absolute path>] [--json]
-  version [--json]
-  help
+const COMMANDS = [
+  ['install', 'Link this plugin into the active img2 home'],
+  ['update', 'Refresh the registered plugin checkout'],
+  ['remove', 'Unlink the plugin from the active img2 home'],
+  ['doctor', 'Run img2 doctor across the entire harness'],
+  ['version', 'Print the plugin package version (--json for machine output)'],
+  ['help', 'Show this help'],
+]
+const OPTIONS = [
+  ['--ref <vX.Y.Z|40-char SHA>', 'install', 'Pin a ref other than the metadata pin'],
+  ['--home <absolute path>', 'install, update, remove, doctor', 'Override IMG2_HOME'],
+  ['--yes', 'install, update, remove', 'Skip the confirmation prompt'],
+  ['--force', 'install', 'Replace the registered ref (never a local link or another source)'],
+  ['--dry-run', 'install', 'Preview without downloads, subprocesses or writes'],
+  ['--check', 'update', 'Read-only check for updates'],
+  ['--json', 'doctor, version', 'Emit machine-readable JSON'],
+  ['--help, -h', 'any', 'Show this help'],
+  ['--version, -v', 'first argument', 'Print the plugin package version'],
+]
 
---version prints the installer version; --help displays this help.
---force replaces only this plugin's registered ref, never a local link or another source.
---dry-run previews installation without downloads, subprocesses or writes.
-Doctor reports the entire img2 harness, not a reconstruction acceptance result.
-`
+function renderHelp() {
+  ui.heading('Usage')
+  ui.table(['Command', 'Description'], COMMANDS)
+  ui.heading('Options')
+  ui.table(['Option', 'Command', 'Description'], OPTIONS)
+  ui.info('--version prints the installer version; --help displays this help.')
+  ui.info('--force replaces only this plugin\'s registered ref, never a local link or another source.')
+  ui.info('--dry-run previews installation without downloads, subprocesses or writes.')
+  ui.info('Doctor reports the entire img2 harness, not a reconstruction acceptance result.')
+}
 
 function parse(argv) {
   const [first = 'help', ...rest] = argv
@@ -79,7 +96,7 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
   try {
     const { command, opts } = parse(argv)
     if (command === 'help' || opts.help) {
-      process.stdout.write(HELP)
+      renderHelp()
       return EXIT.OK
     }
     if (!packageUrl) throw new CliError(EXIT.FAIL, 'packageUrl is required')
@@ -92,7 +109,18 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
     const ref = opts['--ref'] ?? meta.ref
     if (ref !== undefined && !REF.test(ref)) throw new CliError(EXIT.REFUSED, '--ref must be vX.Y.Z or a full git SHA')
     if (command === 'version') {
-      process.stdout.write(opts['--json'] ? JSON.stringify({ name: pkg.name, version: pkg.version, plugin: meta }) + '\n' : pkg.name + ' ' + pkg.version + '\n')
+      if (opts['--json']) {
+        process.stdout.write(JSON.stringify({ name: pkg.name, version: pkg.version, plugin: meta }) + '\n')
+        return EXIT.OK
+      }
+      ui.heading('Plugin version')
+      ui.table(['Field', 'Value'], [
+        ['Package', pkg.name],
+        ['Version', pkg.version],
+        ['Plugin', meta.id],
+        ['Source', meta.source],
+        ['Ref', meta.ref || 'newest semantic tag; HEAD if untagged'],
+      ])
       return EXIT.OK
     }
 
@@ -116,11 +144,13 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
       if (opts['--dry-run']) {
         const hosts = Object.values(HOSTS).filter(host => fs.existsSync(host.configRoot())).map(host => host.label)
         ui.heading('Preview plugin install')
-        ui.detail('Plugin', meta.id)
-        ui.detail('Source', meta.source)
-        ui.detail('Ref', ref || 'newest semantic tag; HEAD if untagged')
-        ui.detail('Home', ui.path(home))
-        ui.detail('Hosts', hosts.join(', ') || 'none detected')
+        ui.table(['Field', 'Value'], [
+          ['Plugin', meta.id],
+          ['Source', meta.source],
+          ['Ref', ref || 'newest semantic tag; HEAD if untagged'],
+          ['Home', ui.path(home)],
+          ['Hosts', hosts.join(', ') || 'none detected'],
+        ])
         ui.info(matches ? 'Already registered; this install would keep the current ref' : 'Preview only; no downloads, subprocesses or filesystem changes')
         const next = matches
           ? ['npx', pkg.name, 'doctor', '--home', home]
@@ -130,9 +160,11 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
       }
       if (matches) {
         ui.heading('Plugin already registered')
-        ui.detail('Plugin', meta.id)
-        ui.detail('Ref', row.ref)
-        ui.detail('Home', ui.path(home))
+        ui.table(['Field', 'Value'], [
+          ['Plugin', meta.id],
+          ['Ref', row.ref],
+          ['Home', ui.path(home)],
+        ])
         ui.info('Nothing changed; registration alone does not verify installation health')
         ui.next(['npx', pkg.name, 'doctor', '--home', home], 'Check the existing installation:')
         return EXIT.OK
@@ -151,7 +183,12 @@ export async function runPluginCli({ packageUrl, argv = process.argv.slice(2) } 
 
     if (!row) {
       if (command === 'remove') {
-        process.stdout.write(meta.id + ' is not registered; nothing changed\n')
+        ui.heading('Plugin not registered')
+        ui.table(['Field', 'Value'], [
+          ['Plugin', meta.id],
+          ['Source', meta.source],
+        ])
+        ui.info('Nothing changed; nothing to remove')
         return EXIT.OK
       }
       throw new CliError(EXIT.FAIL, meta.id + ' is not registered; install it first')

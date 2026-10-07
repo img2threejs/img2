@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
+## [0.4.0] — 2026-10-07
+
+### Added
+
+- Short official plugin IDs: `img2 add environment`, `character`, `cs2`, `hello-cube` or
+  `img2glb`. The live catalog resolves an ID to its Git source; explicit repositories,
+  URLs, npm sources and local links remain independent of catalog availability.
+- Requested-ID validation against the cloned manifest. Unknown IDs and mismatches exit 2;
+  catalog/network failures exit 1 without install-state changes. Existing local registrations
+  are protected before network access; replacement still requires explicit `--force`.
+
+### Changed
+
+- Human CLI output uses responsive tables, semantic terminal colors, a pixel-to-cube
+  img2threejs logo and the existing brand slogan. Shared SDK wrappers use the same renderer.
+- Narrow tables preserve every field; Unicode combining marks, CJK and emoji are measured
+  without counting ANSI color sequences. Displayed controls are escaped.
+- Piped output stays uncolored; `NO_COLOR` and `TERM=dumb` disable color. JSON and implicit
+  capabilities JSON remain banner-free, and plugin/core compatibility schemas are unchanged.
+
+### Fixed
+
+- Drain stdout/stderr before explicit CLI exit so larger human tables are not cut off in pipes.
+
 ## [0.3.0] — 2026-10-07
 
 ### Added
@@ -186,6 +210,7 @@ plugin registry, the workspace state envelope, the gate runner, and the contract
   the lock across the whole read-modify-write, and `tests/python/test_state.py` demonstrably catches the
   bug it guards against.
 
+[0.4.0]: https://github.com/img2threejs/img2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/img2threejs/img2/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/img2threejs/img2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/img2threejs/img2/compare/v0.2.3...v0.2.4

@@ -674,11 +674,12 @@ function syncAll(H, check) {
     }
   })
   if (check) {
-    for (const t of drift) console.log('drift: ' + t.file)
     if (drift.length) {
+      ui.table(['File', 'Status'], drift.map(target => [ui.path(target.file), 'drift']), { statusColumn: 1 })
       throw new CliError(EXIT.FAIL, 'generated artifacts are out of sync (' + drift.length + ' file(s)); run `img2 sync`')
     }
-    console.log('sync check: clean (' + reg.plugins.length + ' plugin(s))')
+    ui.table(['Field', 'Value'], [['Plugins', reg.plugins.length], ['Drift', 0]])
+    ui.ok('Sync check is clean')
     return
   }
   fs.mkdirSync(generatedDir(H), { recursive: true })
@@ -1172,8 +1173,10 @@ async function cmdInstall(opts) {
   }
 
   ui.heading('Set up harness')
-  ui.detail('Home', ui.path(H))
-  ui.detail('Source', opts.from ? ui.path(path.resolve(opts.from)) : HARNESS_REPO_URL)
+  ui.table(['Field', 'Value'], [
+    ['Home', ui.path(H)],
+    ['Source', opts.from ? ui.path(path.resolve(opts.from)) : HARNESS_REPO_URL],
+  ])
   if (!opts.yes) await confirmOrThrow('Proceed?')
 
   ui.step(1, 3, 'Prepare installation home')
@@ -1343,16 +1346,39 @@ async function resolveNpmAndFetch(H, spec, opts) {
 }
 
 async function cmdAdd(opts, spec) {
-  if (!spec && !opts.link) throw new CliError(EXIT.REFUSED, 'add needs <org/repo>, a URL, or --link <localpath>')
+  if (!spec && !opts.link) throw new CliError(EXIT.REFUSED, 'add needs <plugin-id>, <org/repo>, a URL, npm:<name>, or --link <localpath>')
   if (spec && opts.link) throw new CliError(EXIT.REFUSED, 'add takes either a source spec or --link, not both')
   const H = resolveImg2Home(opts.home)
   if (!fs.existsSync(harnessDir(H))) {
     throw new CliError(EXIT.FAIL, 'no harness checkout at ' + harnessDir(H), 'run `img2 install` first')
   }
+  let catalogPlugin = null
+  if (spec && spec.trim() === spec && NAME_RE.test(spec)) {
+    if (opts.plugin && opts.plugin !== spec) {
+      throw new CliError(EXIT.REFUSED, 'plugin ID "' + spec + '" does not match --plugin "' + opts.plugin + '"')
+    }
+    const registered = findRow(readRegistry(H), spec)
+    if (registered && !opts.force) {
+      const local = typeof registered.repo === 'string' && registered.repo.startsWith('link:')
+      throw new CliError(local ? EXIT.REFUSED : EXIT.FAIL,
+        'plugin "' + spec + '" is already registered' + (local ? ' as a local link' : ''),
+        'Nothing changed. Use --force only if you intend to back up and replace this registration.')
+    }
+    const catalog = await getCatalog()
+    catalogPlugin = catalog.plugins.find(plugin => plugin.id === spec)
+    if (!catalogPlugin) {
+      throw new CliError(EXIT.REFUSED, 'unknown official plugin "' + spec + '"', 'Run `img2 plugins` to see available IDs.')
+    }
+    spec = catalogPlugin.source
+    opts = { ...opts, plugin: catalogPlugin.id }
+  }
 
   ui.heading('Install plugin')
-  ui.detail('Source', opts.link ? ui.path(path.resolve(opts.link)) : spec)
-  ui.detail('Home', ui.path(H))
+  ui.table(['Field', 'Value'], [
+    ['Source', opts.link ? ui.path(path.resolve(opts.link)) : spec],
+    ['Home', ui.path(H)],
+  ])
+  if (catalogPlugin?.access === 'private') ui.info('Private source: authorized Git access to the repository is required.')
   ui.step(1, 3, opts.link ? 'Read and validate local plugin' : 'Fetch and validate plugin')
   acquireLock(H)
   let staging = null
@@ -1376,8 +1402,10 @@ async function cmdAdd(opts, spec) {
       throw new CliError(EXIT.REFUSED, 'source plugin "' + id + '" does not match expected "' + opts.plugin + '"')
     }
     ui.ok('Validated ' + id + ' ' + manifest.version)
-    ui.detail('Ref', row.ref)
-    ui.detail('Pin', shortSha(row.resolvedSha))
+    ui.table(['Field', 'Value'], [
+      ['Ref', row.ref],
+      ['Pin', shortSha(row.resolvedSha)],
+    ])
 
     const reg = readRegistry(H)
     const existing = findRow(reg, id)
@@ -1436,8 +1464,7 @@ async function cmdAdd(opts, spec) {
       const target = path.join(HOSTS[key].skills(), linkName(id))
       const outcome = ensureLink(target, dest, H)
       recordReceipt(H, { host: key, plugin: id, target, canonical: dest })
-      ui.ok(HOSTS[key].label + ' / ' + outcome)
-      ui.detail('Skill', ui.path(target))
+      ui.table(['Host', 'Status', 'Skill'], [[HOSTS[key].label, outcome, ui.path(target)]], { statusColumn: 1 })
     }
 
     ui.step(3, 3, 'Sync generated files')
@@ -1454,6 +1481,8 @@ async function cmdAdd(opts, spec) {
 async function cmdRemove(opts, id) {
   if (!id) throw new CliError(EXIT.REFUSED, 'remove needs a plugin id')
   const H = resolveImg2Home(opts.home)
+  ui.heading('Remove plugin')
+  ui.table(['Field', 'Value'], [['Plugin', id], ['Home', ui.path(H)]])
   acquireLock(H)
   try {
     const reg = readRegistry(H)
@@ -1464,22 +1493,23 @@ async function cmdRemove(opts, id) {
       const c = classifyTarget(target)
       if (c.state === 'absent') continue
       if (c.state !== 'symlink' || !underHome(c.resolved, H)) {
-        console.error('img2: leaving ' + target + ' in place (not owned by img2)')
+        ui.warn('Leaving ' + target + ' in place (not owned by img2)')
         continue
       }
       fs.unlinkSync(target)
-      console.log('  unlinked  ' + target)
+      ui.table(['Host', 'Status', 'Skill'], [[HOSTS[key].label, 'unlinked', ui.path(target)]], { statusColumn: 1 })
     }
     writeReceipts(H, readReceipts(H).filter((e) => e.plugin !== id))
 
     const dest = cloneDir(H, id)
     if (classifyTarget(dest).state !== 'absent') {
-      console.log('  backed up ' + dest + ' -> ' + moveToBackups(H, dest, id))
+      const backup = moveToBackups(H, dest, id)
+      ui.table(['Field', 'Value'], [['Previous checkout', ui.path(dest)], ['Backup', ui.path(backup)]])
     }
 
     writeRegistry(H, reg)
     syncAll(H, false)
-    console.log('removed ' + id)
+    ui.ok('Removed ' + id)
     return EXIT.OK
   } finally {
     releaseLock()
@@ -1489,18 +1519,21 @@ async function cmdRemove(opts, id) {
 async function cmdList(opts) {
   const H = resolveImg2Home(opts.home)
   const reg = readRegistry(H)
+  ui.heading('Registered plugins')
+  ui.table(['Field', 'Value'], [['Home', ui.path(H)], ['Registered', reg.plugins.length]])
   if (!reg.plugins.length) {
-    console.log('(no plugins registered)')
+    ui.info('No plugins registered. Browse the official catalog:')
+    ui.command(['img2', 'plugins'])
     return EXIT.OK
   }
-  console.log('id'.padEnd(24) + 'version'.padEnd(10) + 'ref'.padEnd(14) + 'sha')
-  for (const row of [...reg.plugins].sort((a, b) => a.id.localeCompare(b.id))) {
+  const rows = [...reg.plugins].sort((a, b) => a.id.localeCompare(b.id)).map(row => {
     let version = '?'
     try {
       version = JSON.parse(fs.readFileSync(path.join(cloneDir(H, row.id), 'plugin.json'), 'utf8')).version || '?'
     } catch { /* listed anyway; doctor reports the cause */ }
-    console.log(row.id.padEnd(24) + String(version).padEnd(10) + String(row.ref).padEnd(14) + shortSha(row.resolvedSha))
-  }
+    return [row.id, version, row.ref, shortSha(row.resolvedSha)]
+  })
+  ui.table(['Plugin', 'Version', 'Ref', 'Pin'], rows)
   return EXIT.OK
 }
 
@@ -1750,17 +1783,24 @@ async function cmdDoctor(opts) {
     return fails ? EXIT.FAIL : EXIT.OK
   }
 
-  for (const f of findings) console.log(f.level + '  ' + (f.plugin || '-').padEnd(20) + ' ' + f.msg)
-  if (fails) {
-    console.log('doctor: ' + fails + ' failure(s), ' + warns + ' warning(s)')
-    return EXIT.FAIL
+  ui.heading('Installation audit')
+  if (findings.length) {
+    ui.table(['Level', 'Plugin', 'Finding'], findings.map(finding => [
+      finding.level, finding.plugin || '-', finding.msg,
+    ]), { statusColumn: 0 })
   }
-  console.log('doctor: ok (' + (reg ? reg.plugins.length : 0) + ' plugin(s), ' + warns + ' warning(s))')
-  return EXIT.OK
+  ui.table(['Field', 'Value'], [
+    ['Registered plugins', reg ? reg.plugins.length : 0],
+    ['Failures', fails],
+    ['Warnings', warns],
+  ])
+  return fails ? EXIT.FAIL : EXIT.OK
 }
 
 async function cmdSync(opts) {
   const H = resolveImg2Home(opts.home)
+  ui.heading(opts.check ? 'Check generated files' : 'Sync generated files')
+  ui.detail('Home', ui.path(H))
   if (opts.check) {
     syncAll(H, true)
     return EXIT.OK
@@ -1784,6 +1824,8 @@ async function cmdSync(opts) {
 async function cmdUpdate(opts, args) {
   const H = resolveImg2Home(opts.home)
   const onlyId = args[0] || null
+  ui.heading(opts.check ? 'Check plugin updates' : 'Update plugins')
+  ui.table(['Field', 'Value'], [['Home', ui.path(H)], ['Selection', onlyId || 'All registered plugins']])
   acquireLock(H)
   let staging = null
   try {
@@ -1795,7 +1837,7 @@ async function cmdUpdate(opts, args) {
     let pending = 0
     for (const row of rows) {
       if (row.repo.startsWith('link:')) {
-        console.log('  local         ' + row.id + ' (' + row.repo + '); nothing to update')
+        ui.table(['Plugin', 'Status', 'Ref', 'Source'], [[row.id, 'local', row.ref, row.repo]], { statusColumn: 1 })
         continue
       }
 
@@ -1811,19 +1853,19 @@ async function cmdUpdate(opts, args) {
         const { url } = resolveSource(row.repo, true)
         latest = latestTagFor(url)
         if (!latest) {
-          console.log('  no tag        ' + row.id + ' (' + row.repo + '); nothing to compare against')
+          ui.table(['Plugin', 'Status', 'Ref', 'Source'], [[row.id, 'no tag', row.ref, row.repo]], { statusColumn: 1 })
           continue
         }
         fetch = () => resolveRefAndClone(H, row.repo, { ...opts, ref: latest, allowAnySource: true })
       }
 
       if (latest === row.ref) {
-        console.log('  up to date    ' + row.id + ' ' + row.ref)
+        ui.table(['Plugin', 'Status', 'Ref'], [[row.id, 'up to date', row.ref]], { statusColumn: 1 })
         continue
       }
       pending += 1
       if (opts.check) {
-        console.log('  update avail  ' + row.id + ' ' + row.ref + ' -> ' + latest)
+        ui.table(['Plugin', 'Status', 'Current', 'Latest'], [[row.id, 'pending', row.ref, latest]], { statusColumn: 1 })
         continue
       }
 
@@ -1837,13 +1879,14 @@ async function cmdUpdate(opts, args) {
         throw new CliError(EXIT.FAIL, row.id + ': updated manifest name "' + manifest.name + '" no longer matches the registered id')
       }
       const dest = cloneDir(H, row.id)
-      console.log('  backed up ' + dest + ' -> ' + moveToBackups(H, dest, row.id))
+      const backup = moveToBackups(H, dest, row.id)
+      ui.table(['Field', 'Value'], [['Previous checkout', ui.path(dest)], ['Backup', ui.path(backup)]])
       fs.renameSync(staging, dest)
       staging = null
       row.ref = cloned.ref
       row.resolvedSha = cloned.resolvedSha
       updated += 1
-      console.log('  updated       ' + row.id + ' -> ' + row.ref + ' @ ' + shortSha(row.resolvedSha))
+      ui.table(['Plugin', 'Status', 'Ref', 'Pin'], [[row.id, 'updated', row.ref, shortSha(row.resolvedSha)]], { statusColumn: 1 })
     }
 
     if (updated) {
@@ -1851,10 +1894,10 @@ async function cmdUpdate(opts, args) {
       syncAll(H, false)
     }
     if (opts.check) {
-      console.log('update --check: ' + pending + ' pending')
+      ui.table(['Field', 'Value'], [['Pending updates', pending]])
       return pending ? EXIT.FAIL : EXIT.OK
     }
-    console.log('update: ' + updated + ' updated')
+    ui.table(['Field', 'Value'], [['Updated plugins', updated]])
     return EXIT.OK
   } finally {
     if (staging) fs.rmSync(staging, { recursive: true, force: true })
@@ -2097,22 +2140,24 @@ async function cmdPlugins(opts, args) {
       await write(JSON.stringify(result) + '\n')
     } else {
       ui.heading('Available plugins')
-      ui.detail('Total', String(result.counts.total))
-      ui.detail('Public', String(result.counts.public))
-      ui.detail('Private', String(result.counts.private))
-      ui.detail('With npm CLI', String(result.counts.npmClis))
-      ui.detail('Updated', result.updatedAt)
-      ui.detail('Source', CATALOG_URL)
-      console.log()
+      ui.table(['Field', 'Value'], [
+        ['Total', result.counts.total],
+        ['Public sources', result.counts.public],
+        ['Private sources', result.counts.private],
+        ['npm CLIs', result.counts.npmClis],
+        ['Updated', result.updatedAt],
+        ['Catalog URL', CATALOG_URL],
+      ])
       ui.info('Official, publicly announced catalog. Use img2 list for plugins registered on this machine.')
       if (result.counts.private) ui.info('Private sources require authorized Git access to the repository.')
-      for (const plugin of result.plugins) {
-        console.log()
-        ui.info(plugin.id + ' / ' + plugin.access + ' -- ' + plugin.description)
-        ui.detail('Source', plugin.source)
-        if (plugin.npmCli) ui.detail('npm CLI', plugin.npmCli)
-        ui.command(plugin.install)
-      }
+      ui.info('Set up the harness with img2 install, then add a plugin by its ID.')
+      ui.table(['Plugin', 'Access', 'npm CLI', 'Add command'], result.plugins.map(plugin => [
+        plugin.id, plugin.access, plugin.npmCli || '-', 'img2 add ' + plugin.id,
+      ]), { statusColumn: 1 })
+      ui.heading('Plugin sources')
+      ui.table(['Plugin', 'GitHub source', 'Description'], result.plugins.map(plugin => [
+        plugin.id, plugin.source, plugin.description,
+      ]))
       await write('')
     }
     return EXIT.OK
@@ -2128,44 +2173,55 @@ async function cmdPlugins(opts, args) {
 
 // ---------------------------------------------------------------- entry
 
-const HELP = [
-  'img2 -- plugin harness for the img2 ecosystem',
-  '',
-  'Usage',
-  '  img2 install [--from <localpath>] [--home <dir>] [--yes] [--migrate-legacy]',
-  '  img2 add <org/repo | url> [--ref <tag|branch>] [--force] [--allow-any-source] [--plugin <expected-id>]',
-  '  img2 add npm:<name>[@<version>] [--force] [--allow-any-source]',
-  '  img2 add --link <localpath> [--force]',
-  '  img2 remove <id>',
-  '  img2 list',
-  '  img2 plugins [--json]',
-  '  img2 update [<id>] [--check] [--yes] [--allow-any-source]',
-  '  img2 doctor [--json]',
-  '  img2 sync [--check]',
-  '  img2 capabilities [--from-kind <kind>] [--to-kind <kind>] [--plugin <id>] [--json]',
-  '',
-  'Options',
-  '  --from <path>        clone the harness from a local checkout instead of GitHub',
-  '  --home <dir>         use this $IMG2_HOME (absolute path)',
-  '  --yes                never prompt',
-  '  --migrate-legacy     move a legacy ~/.img2threejs/repo checkout to backups and continue',
-  '  --ref <ref>          pin a plugin to a tag or branch (default: newest semver tag)',
-  '  --link <path>        register a local plugin checkout via symlink (no clone)',
-  '  --force              replace an existing registered plugin',
-  '  --allow-any-source   accept a source outside the ' + DEFAULT_ORG + '/* org (or @' + DEFAULT_ORG + ' npm scope)',
-  '  --check              sync: verify generated artifacts without writing; update: report pending updates without fetching',
-  '  --from-kind <kind>   capabilities: the edge\'s source kind',
-  '  --to-kind <kind>     capabilities: the edge\'s destination kind',
-  '  --plugin <id>        add: require this source identity; capabilities: select a provider',
-  '  --json               version/doctor: emit machine-readable output; capabilities: implied; plugins: emit the catalog envelope',
-  '',
-  'Environment',
-  '  IMG2_HOME            harness home (default ~/.img2)',
-  '  IMG2THREEJS_HOME     deprecated alias, honoured one release with a warning',
-  '',
-  'Exit codes',
-  '  0 success   1 failure   2 refused   3 interactive input required',
-].join('\n')
+const HELP_COMMANDS = [
+  ['img2 install', 'Set up the harness and supported agent hosts'],
+  ['img2 plugins [--json]', 'Discover officially announced plugins'],
+  ['img2 add <plugin-id>', 'Install by catalog ID: environment, character, cs2, hello-cube, img2glb'],
+  ['img2 add <org/repo | url>', 'Install directly from a Git repository'],
+  ['img2 add npm:<name>[@<version>]', 'Install a plugin package from npm'],
+  ['img2 add --link <localpath>', 'Register a local checkout without cloning'],
+  ['img2 list', 'List locally registered plugins'],
+  ['img2 update [<id>] [--check]', 'Update managed plugins or check for newer versions'],
+  ['img2 remove <id>', 'Remove registration and owned host links; keep a backup'],
+  ['img2 doctor [--json]', 'Audit installation health without executing plugin code'],
+  ['img2 sync [--check]', 'Regenerate indexes or check for drift'],
+  ['img2 capabilities [--from-kind <kind>] [--to-kind <kind>] [--plugin <id>]', 'Query providers; output is always JSON'],
+  ['img2 --version [--json]', 'Show harness and contract versions'],
+  ['img2 --help', 'Show this help'],
+]
+
+function printHelp() {
+  ui.heading('Commands')
+  ui.table(['Command', 'Purpose'], HELP_COMMANDS)
+  ui.heading('Options')
+  ui.table(['Option', 'Purpose'], [
+    ['--from <path>', 'install: clone the harness from a local checkout'],
+    ['--home <dir>', 'Use this absolute IMG2_HOME path'],
+    ['--yes, -y', 'Never prompt'],
+    ['--migrate-legacy', 'install: back up a legacy ~/.img2threejs/repo checkout'],
+    ['--ref <ref>', 'add: select a tag or branch; default newest semver tag'],
+    ['--link <path>', 'add: symlink a local plugin checkout'],
+    ['--force', 'add: back up and replace an existing registration'],
+    ['--allow-any-source', 'Accept Git sources outside ' + DEFAULT_ORG + ' or npm packages outside @' + DEFAULT_ORG],
+    ['--check', 'sync: check drift; update: report pending versions without replacing plugins'],
+    ['--from-kind <kind>', 'capabilities: source kind'],
+    ['--to-kind <kind>', 'capabilities: destination kind'],
+    ['--plugin <id>', 'add: require this identity; capabilities: select this provider'],
+    ['--json', 'version/doctor/plugins: machine-readable output; capabilities: implied'],
+    ['--version, -v', 'Show version and exit'],
+    ['--help, -h', 'Show help and exit'],
+  ])
+  ui.heading('Environment')
+  ui.table(['Variable', 'Purpose'], [
+    ['IMG2_HOME', 'Harness home; default ~/.img2'],
+    ['IMG2THREEJS_HOME', 'Deprecated alias; emits a warning'],
+  ])
+  ui.heading('Exit codes')
+  ui.table(['Code', 'Meaning'], [
+    [EXIT.OK, 'Success'], [EXIT.FAIL, 'Failure'],
+    [EXIT.REFUSED, 'Refused'], [EXIT.NEEDS_INPUT, 'Interactive input required'],
+  ])
+}
 
 export function parseArgs(argv) {
   const opts = {
@@ -2246,17 +2302,24 @@ async function main() {
       }))
       return EXIT.OK
     }
-    console.log('img2 ' + harnessVersion() + ' (MAX_PLUGIN_SCHEMA=' + MAX_PLUGIN_SCHEMA + ', coreApi=' + CORE_API + ')')
+    ui.heading('Version')
+    ui.table(['Field', 'Value'], [
+      ['Harness', harnessVersion()],
+      ['Plugin schema', MAX_PLUGIN_SCHEMA],
+      ['Core API', CORE_API],
+      ['Contract', CONTRACT_REVISION],
+    ])
     return EXIT.OK
   }
   if (opts.help || !command) {
-    console.log(HELP)
+    printHelp()
     return opts.help ? EXIT.OK : EXIT.REFUSED
   }
   const handler = COMMANDS[command]
   if (!handler) {
     throw new CliError(EXIT.REFUSED, 'unknown command: ' + command, 'expected ' + Object.keys(COMMANDS).join(', '))
   }
+  if (!opts.json && command !== 'capabilities') ui.banner()
   return handler(opts, args)
 }
 
@@ -2274,11 +2337,18 @@ if (invokedDirectly) {
     releaseLock()
     process.exit(EXIT.FAIL)
   })
+  // Tables may exceed a pipe buffer; drain both streams before the explicit exit.
+  const finish = async code => {
+    await Promise.all([process.stdout, process.stderr].map(stream => new Promise((resolve, reject) => {
+      stream.write('', error => error ? reject(error) : resolve())
+    })))
+    process.exit(code)
+  }
   main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
+    .then(finish)
+    .catch(async (err) => {
       releaseLock()
       ui.error('img2', err.message, err.detail)
-      process.exit(err instanceof CliError ? err.code : EXIT.FAIL)
+      await finish(err instanceof CliError ? err.code : EXIT.FAIL)
     })
 }

@@ -30,7 +30,7 @@ npx @img2threejs/img2 install           # $IMG2_HOME (~/.img2), harness checkout
                                         # (~/.local/bin, /opt/homebrew/bin, or /usr/local/bin —
                                         # if none qualifies, use npx instead)
 img2 plugins                            # available official plugins: count, source, install command
-img2 add img2threejs/plugin-img2glb      # clone @ newest tag, pin SHA, link ~/.claude/skills/img2-img2glb
+img2 add img2glb                         # catalog ID → Git source, newest tag, SHA pin, host links
 img2 list                               # registered plugins: id, version, ref, sha
 img2 update                             # re-check every row's source for a newer version, fetch it
 img2 doctor                             # fail-loud static audit of every row (--json for tooling)
@@ -39,6 +39,28 @@ img2 remove img2glb                     # unlink every host, move clone to backu
 ```
 
 Every command also runs without the launcher: `npx @img2threejs/img2 <command>`.
+
+### Add by plugin ID
+
+```bash
+img2 add environment
+img2 add character
+img2 add cs2
+img2 add hello-cube
+img2 add img2glb
+img2 add environment --ref <40-character-commit-SHA> --yes
+```
+
+Requires an installed harness (`img2 install`). Bare IDs resolve through the official live
+catalog, then use the existing Git install flow—not the entry's optional npm installer.
+Unknown IDs exit 2; catalog/network failures exit 1, without changing install state.
+The cloned manifest must match the requested ID. Private sources still require authorized
+Git access.
+
+`--yes` does **not** permit replacement. An existing local link is refused before catalog
+access or cloning; use `--force` only when deliberately replacing its registration. The old
+mount is backed up, and the original linked checkout remains intact. Explicit `org/repo`,
+Git URLs, `npm:<name>` and `--link` continue to work without catalog access.
 
 ### Discover plugins
 
@@ -64,17 +86,24 @@ Listing never installs plugins, reads registrations or creates a harness home.
 Maintainers add or update announced entries in the root `catalog.json` (schema 1); unpublished
 private repositories must remain outside the public catalog.
 
-### Install output
+### CLI presentation
+
+Human output includes the img2threejs wordmark, a colored pixel-to-cube terminal logo,
+and the brand slogan: “Rebuild the object in a reference image as a code-only, procedural
+Three.js model.” Catalogs, registrations, audit findings, metadata, help and update outcomes
+use bounded-width tables; narrow multi-column records become Field/Value tables.
 
 `install` and `add` show numbered phases, actual host-link outcomes, the selected ref/pin,
 backup locations when replacing an installation, and a copyable `doctor` command on success.
-Plugin CLI wrappers use the same presentation for offline previews and already-registered installs.
+Plugin CLI wrappers using SDK 0.4.0 use the same presentation for offline previews and
+already-registered installs. Wrappers pinned to an older SDK retain their existing UI.
 Registration alone is not a health check; run `doctor` for that.
 
 Color is enabled only on the corresponding terminal stream. Set `NO_COLOR=1` to disable it;
 `TERM=dumb` is also plain. Redirected/piped output stays uncolored even with `FORCE_COLOR`.
 Narrow terminals stack fields and wrap messages without truncating paths or refs.
-Machine-readable `--json` output and exit codes are unchanged.
+Machine-readable `--json` output, implicitly-JSON `capabilities`, and exit codes are unchanged;
+they never include a banner or table.
 
 Use `npx @img2threejs/img2@latest <command>` to pick up installer updates.
 `install` keeps an existing harness checkout; it does not automatically upgrade an older

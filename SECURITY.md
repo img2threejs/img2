@@ -30,7 +30,7 @@ fact**, and that **nothing runs by surprise**. Those are the properties to attac
 | **`argv[0]` must be a path form or a known interpreter** (`python3 python node bash sh`). A bare word is refused. | contract §10 |
 | **Placeholders are a closed set** — `{plugin_dir}`, `{workspace}`, `{image}`. Anything else fails `doctor`. | contract §10, §12 |
 | **Installs are pinned and attributed** — `resolvedSha` in `receipts.json`, a row in `plugins.json`, linked under a harness-owned name. | contract §7 |
-| **Source is allow-listed.** The default is the `img2threejs` org; anything else requires `--allow-any-source`, which prints what it is about to clone. | contract §7 |
+| **Source is allow-listed.** Bare plugin IDs resolve only through the official catalog to an `img2threejs` Git source, with the requested manifest ID enforced. Explicit sources outside the default org/scope require `--allow-any-source`. | contract §7 |
 | **Nothing is deleted in place.** Displaced directories move to `backups/`. | `$IMG2_HOME` layout |
 | **A plugin cannot change a pipeline.** `overrides` is user-authored in `plugins.json`; a plugin manifest declaring it is refused at install. | contract §6 |
 | **A plugin cannot lower a quality floor.** The augmentation merge is raise-only and runs in base code, never delegated to the plugin. | base skill |
@@ -89,6 +89,7 @@ Security fixes land on the latest tag. There is no long-term support branch.
 
 | Version | Supported |
 |---|---|
-| 0.3.x | yes |
+| 0.4.x | yes |
+| 0.3.x | no |
 | 0.2.x | no |
 | 0.1.x | no |

@@ -157,8 +157,15 @@ four rules; it defines no mechanism.
 
 ## 7. Trust boundary
 
-- `img2 add <spec>` accepts `org/repo`, a URL, `npm:<name>[@<version>]`, or
-  `--link <localpath>` (symlink a local checkout for development; no clone).
+- `img2 add <spec>` accepts an officially catalogued bare plugin ID, `org/repo`, a URL,
+  `npm:<name>[@<version>]`, or `--link <localpath>` (symlink a local checkout for development;
+  no clone). The harness must already be installed.
+- Bare IDs resolve through the fixed official live catalog before acquiring the install lock,
+  then use the existing Git install flow. The cloned manifest name MUST match the requested
+  ID; an explicit mismatching `--plugin` is refused before fetching. Unknown IDs exit 2;
+  catalog/network failures exit 1 without install-state changes.
+- An existing local registration is refused before catalog access unless `--force` explicitly
+  authorizes backup-and-replacement. The original linked checkout is never replaced in place.
 - Default allowed source is the `img2threejs/*` org (git) or the `@img2threejs` scope
   (npm — this project's own plugins are published as `@img2threejs/plugin-*`). Anything
   else requires `--allow-any-source` and prints what it is about to clone and link.

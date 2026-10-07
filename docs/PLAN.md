@@ -8,7 +8,8 @@ Restructure the img2threejs ecosystem so capabilities are plugins, modeled on
 deepseek-ai/deepseek-harness:
 
 1. Each plugin is its **own git repo**, versioned and released independently.
-2. **One-command install** per plugin (`img2 add <org/repo>`).
+2. **One-command install** per announced plugin (`img2 add <plugin-id>`); explicit `org/repo`
+   sources remain supported for plugins outside the official catalog.
 3. Adding a future plugin (img2glb, glb2threejs, …) for an ALREADY-DECLARED slot requires
    **zero edits to the harness** (registration only). Declaring a NEW slot the pipeline does
    not yet expose is a base-skill release, not a plugin install — `glb2threejs` will require
@@ -48,11 +49,14 @@ org img2threejs
 User-facing flow:
 
 ```
-npx github:img2threejs/img2 install          # $IMG2_HOME (~/.img2), host links, settings merge
-img2 add img2threejs/plugin-img2glb          # clone @tag, pin SHA, row, symlink ~/.claude/skills/img2-img2glb
+npx @img2threejs/img2@latest install          # $IMG2_HOME (~/.img2), host links, settings merge
+img2 add img2glb                              # catalog ID → Git source, tag/SHA pin, row, host links
 img2 doctor                                  # fail-loud static audit of every row
 img2 sync --check                            # generated edge list == manifests' declared edges (CI-able)
 ```
+
+CLI 0.4.0 adds official-ID shorthand and branded, responsive human tables. Catalog and
+version/doctor/capability JSON remain machine-readable; plugin/core schemas are unchanged.
 
 ## Decisions log (each was contested; alternatives rejected for cause)
 
