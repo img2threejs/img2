@@ -24,43 +24,176 @@ Ecosystem discovery: `img2 plugins` reads the [official catalog](catalog.json). 
 
 ## Quickstart
 
-```bash
-npx @img2threejs/img2 install           # $IMG2_HOME (~/.img2), harness checkout, host settings,
-                                        # and an `img2` launcher linked into a writable PATH dir
-                                        # (~/.local/bin, /opt/homebrew/bin, or /usr/local/bin —
-                                        # if none qualifies, use npx instead)
-img2 plugins                            # available official plugins: count, source, install command
-img2 add img2glb                         # catalog ID → Git source, newest tag, SHA pin, host links
-img2 list                               # registered plugins: id, version, ref, sha
-img2 update                             # re-check every row's source for a newer version, fetch it
-img2 doctor                             # fail-loud static audit of every row (--json for tooling)
-img2 sync --check                       # generated index == manifests (CI-able)
-img2 remove img2glb                     # unlink every host, move clone to backups, drop the row
-```
+### 1. Install the harness
 
-Every command also runs without the launcher: `npx @img2threejs/img2 <command>`.
-
-### Add by plugin ID
+You need **Node.js ≥ 18, Git and Python ≥ 3.10**. Configure at least one supported agent
+host first: Claude Code, Codex or OpenCode. See [Prerequisites](#prerequisites) for detection
+paths. Use CLI **0.4.0 or newer** for short plugin IDs and the branded table output.
 
 ```bash
-img2 add environment
-img2 add character
-img2 add cs2
-img2 add hello-cube
-img2 add img2glb
-img2 add environment --ref <40-character-commit-SHA> --yes
+npx --yes @img2threejs/img2@latest install --yes
 ```
 
-Requires an installed harness (`img2 install`). Bare IDs resolve through the official live
-catalog, then use the existing Git install flow—not the entry's optional npm installer.
-Unknown IDs exit 2; catalog/network failures exit 1, without changing install state.
-The cloned manifest must match the requested ID. Private sources still require authorized
-Git access.
+This prepares the harness checkout and registry under `~/.img2`, configures supported host
+access, and links an `img2` launcher into a writable directory on your `PATH` when possible.
+Read the install output for the actual launcher location.
 
-`--yes` does **not** permit replacement. An existing local link is refused before catalog
-access or cloning; use `--force` only when deliberately replacing its registration. The old
-mount is backed up, and the original linked checkout remains intact. Explicit `org/repo`,
-Git URLs, `npm:<name>` and `--link` continue to work without catalog access.
+The first `--yes` belongs to **npx** and allows downloading the CLI package. The final
+`--yes` belongs to **img2** and skips its confirmation prompt; omit it if you want to confirm
+interactively. Neither flag authorizes replacement of an existing plugin.
+
+### 2. Choose how to run the CLI
+
+If the installed launcher is available, check it with:
+
+```bash
+img2 --version
+img2 --help
+```
+
+If `img2` is not found, or its version is older than 0.4.0, use the latest CLI directly:
+
+```bash
+npx --yes @img2threejs/img2@latest plugins
+npx --yes @img2threejs/img2@latest add hello-cube --yes
+```
+
+For short commands that always use the latest published CLI, set this **bash/zsh alias**:
+
+```bash
+alias img2='npx --yes @img2threejs/img2@latest'
+```
+
+The alias takes precedence over an older launcher and lasts for the current shell session.
+For zsh, add that line to `~/.zshrc` and run `source ~/.zshrc` to keep it in future sessions.
+Every `img2 ...` example below also works as `npx --yes @img2threejs/img2@latest ...`.
+
+**Existing installations:** `install` keeps the existing harness checkout; it does not
+automatically upgrade an old launcher. Use the alias or the explicit `npx ...@latest` form
+to get the new CLI without replacing your current registrations.
+
+### 3. Browse plugins and install only what you need
+
+```bash
+img2 plugins       # official plugins available to install
+img2 list          # plugins already registered on this machine
+```
+
+These are different lists. `plugins` reads the live official catalog; it does not install
+anything and can run before harness setup. `list` reads your local registry.
+
+| Plugin / source README | What it provides | Git source | Install after harness setup |
+|---|---|---|---|
+| [character](https://github.com/img2threejs/plugin-character) | Character rigging, skin conditioning, animation and rig gates | Public | `img2 add character --yes` |
+| [cs2](https://github.com/img2threejs/plugin-cs2) | Counter-Strike 2 weapon/glove skin reconstruction and review gates | Public | `img2 add cs2 --yes` |
+| [environment](https://github.com/img2threejs/plugin-environment) | The environment plugin, distributed from a private repository | **Private — authorized Git access required** | `img2 add environment --yes` |
+| [hello-cube](https://github.com/img2threejs/plugin-hello-cube) | A small deterministic image-to-Three.js cube example | Public | `img2 add hello-cube --yes` |
+| [img2glb](https://github.com/img2threejs/plugin-img2glb) | Image-to-GLB mesh generation through the hosted TRELLIS space | Public | `img2 add img2glb --yes` |
+
+The table lists announced plugins; use `img2 plugins` for the current catalog. You do not
+need to install all of them. For a small first installation:
+
+```bash
+img2 add hello-cube --yes
+img2 list
+img2 doctor
+img2 sync --check
+```
+
+`add` resolves a bare ID through the catalog, clones its Git source, validates the requested
+manifest identity, pins the resolved commit and links the skill into detected hosts. It
+does **not** run a reconstruction. `doctor` is a static installation audit, not a visual
+quality or reconstruction acceptance check. `sync --check` verifies that generated files
+match the registered manifests.
+
+### 4. Use the installed plugin in your agent
+
+Start a new agent session, or restart the current one, so updated skills are loaded.
+Open the plugin's linked README above for its inputs, setup and workflow; follow its
+`SKILL.md` and tool instructions for the actual task. For example, ask your agent:
+
+```text
+Use the hello-cube skill with ./reference.png. Follow the plugin's instructions,
+produce the Three.js output, and report the output files and checks performed.
+```
+
+The harness manages installation and capability lookup. It does not generate a model just
+because a plugin was added, and it does not replace each plugin's usage instructions.
+
+### 5. Check for updates, update or remove a plugin
+
+```bash
+img2 update hello-cube --check   # check this plugin without replacing it
+img2 update hello-cube           # install a newer available version
+img2 doctor                     # audit again after changes
+img2 remove hello-cube          # unlink owned host links and back up the managed checkout
+```
+
+Omit the ID from `img2 update` to inspect/update all registered plugins. `update --check`
+exits **1 when an update is pending**, and 0 when none is pending; no checkout is replaced.
+Git updates follow the newest reachable semver tag. Local `--link` checkouts are live and
+are not fetched by `update`. Removal drops the registry row and its user-authored overrides;
+it does not delete the original source checkout of a local link.
+
+### Private environment plugin
+
+The [environment source](https://github.com/img2threejs/plugin-environment) requires a
+GitHub account with repository access and working Git credentials. A private GitHub link
+may appear as 404 when you are signed out or lack permission. The public
+[`img2-environment` npm installer](https://www.npmjs.com/package/img2-environment) does
+**not** grant access to that source.
+
+With the harness installed and Git access configured:
+
+```bash
+img2 add environment --yes
+img2 doctor
+```
+
+Alternatively, the standalone installer can preview an installation without changes and
+bootstrap the harness when installing:
+
+```bash
+npx --yes img2-environment install --dry-run
+npx --yes img2-environment install --yes
+```
+
+That installer has its own SDK version pin; it may not use the latest harness UI.
+
+### Refs, replacement and common refusals
+
+| Situation / option | What to do |
+|---|---|
+| No harness checkout | Run `img2 install --yes` before `img2 add <id>` |
+| Unknown plugin ID | Check `img2 plugins`; bare IDs must be in the official catalog |
+| Catalog/network unavailable | Retry when reachable, or use a known explicit Git/npm/local source |
+| Git access denied for a private source | Obtain repository permission and configure Git authentication |
+| Plugin already registered | Use `img2 list` and `img2 update <id>`; adding it again does not silently replace it |
+| Registered as a local link | Keep using that checkout, or explicitly choose replacement with `--force` |
+| `--ref <ref>` | Select an existing Git tag, branch or full commit SHA instead of automatic tag selection |
+| `--home <absolute-path>` | Select the same harness home for every related command; the default is `~/.img2` |
+| `--yes` | Skip consent prompts; it is **not** permission to overwrite a registration |
+
+For a ref-pinned install, use a real ref from that plugin's repository:
+
+```bash
+img2 add hello-cube --ref main --yes
+```
+
+Only when you deliberately want to replace an existing registration:
+
+```bash
+img2 add environment --force --yes
+```
+
+`--force` backs up the previous managed checkout or mount before replacement. If the
+registration is a local link, the original linked checkout remains intact. Without
+`--force`, a local registration is refused before catalog access or cloning.
+
+Explicit `org/repo`, Git URLs, `npm:<name>` and `--link` continue to work without catalog
+access. Sources outside the default GitHub org/npm scope need `--allow-any-source`;
+review them before authorizing installation. Unknown catalog IDs and identity mismatches
+exit 2; catalog/network failures exit 1 without changing install state.
 
 ### Discover plugins
 
@@ -186,7 +319,7 @@ Four properties a caller can rely on:
 To detect whether a harness supports this at all, without parsing prose:
 
 ```bash
-img2 --version --json    # {"harness":"0.2.0","maxPluginSchema":1,"coreApi":1,
+img2 --version --json    # {"harness":"0.4.0","maxPluginSchema":1,"coreApi":1,
                          #  "contract":14,"commands":[…,"capabilities"]}
 ```
 
