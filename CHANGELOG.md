@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 change that breaks a conforming plugin bumps one of those and states the migration in
 `docs/PLUGIN_CONTRACT.md` itself.
 
+## [Unreleased]
+
+### Changed
+
+- Official standalone installers use the `@img2threejs` npm organization:
+  `@img2threejs/character`, `@img2threejs/cs2`, and `@img2threejs/environment`.
+  The live catalog links these installer packages; bare-ID `add` still uses Git.
+- Installation instructions distinguish scoped npm package names from the existing
+  `img2-character`, `img2-cs2`, and `img2-environment` executable names.
+
 ## [0.4.0] — 2026-10-07
 
 ### Added

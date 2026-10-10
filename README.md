@@ -135,12 +135,33 @@ Git updates follow the newest reachable semver tag. Local `--link` checkouts are
 are not fetched by `update`. Removal drops the registry row and its user-authored overrides;
 it does not delete the original source checkout of a local link.
 
+### Organization npm installers
+
+The standalone installers are public packages in the
+[`@img2threejs` npm organization](https://www.npmjs.com/org/img2threejs):
+
+| Plugin | npm package | Install, including harness setup if missing |
+|---|---|---|
+| character | [@img2threejs/character](https://www.npmjs.com/package/@img2threejs/character) | `npx --yes @img2threejs/character install --yes` |
+| cs2 | [@img2threejs/cs2](https://www.npmjs.com/package/@img2threejs/cs2) | `npx --yes @img2threejs/cs2 install --yes` |
+| environment | [@img2threejs/environment](https://www.npmjs.com/package/@img2threejs/environment) | `npx --yes @img2threejs/environment install --yes` |
+
+Run the same command with `--dry-run` instead of `--yes` to preview without writes.
+Use `doctor` to audit the installation, `update --check` to check plugin releases, and
+`remove --yes` to remove an installed plugin. Installer packages contain only the CLI;
+plugin source is fetched separately at the package's immutable commit pin. They use
+`@img2threejs/img2@0.4.0` and do not run a reconstruction.
+
+The npm package name and executable differ: a global installation of
+`@img2threejs/cs2` provides `img2-cs2`, and likewise for character/environment.
+`img2 add <id>` still resolves the plugin's Git source, not its npm installer.
+
 ### Private environment plugin
 
 The [environment source](https://github.com/img2threejs/plugin-environment) requires a
 GitHub account with repository access and working Git credentials. A private GitHub link
 may appear as 404 when you are signed out or lack permission. The public
-[`img2-environment` npm installer](https://www.npmjs.com/package/img2-environment) does
+[`@img2threejs/environment` npm installer](https://www.npmjs.com/package/@img2threejs/environment) does
 **not** grant access to that source.
 
 With the harness installed and Git access configured:
@@ -154,11 +175,12 @@ Alternatively, the standalone installer can preview an installation without chan
 bootstrap the harness when installing:
 
 ```bash
-npx --yes img2-environment install --dry-run
-npx --yes img2-environment install --yes
+npx --yes @img2threejs/environment install --dry-run
+npx --yes @img2threejs/environment install --yes
 ```
 
-That installer has its own SDK version pin; it may not use the latest harness UI.
+The organization installer pins SDK `0.4.0` and plugin source commit `c19f5f2`.
+Newer local environment development is not included in this installer.
 
 ### Refs, replacement and common refusals
 

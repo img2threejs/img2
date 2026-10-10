@@ -1,27 +1,27 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-07",
+  "updatedAt": "2026-10-10",
   "plugins": [
     {
       "id": "character",
       "description": "Character rigging and animation: skeleton from a GLB, skin conditioning, clip measurement, action design, and a twelve-check rig gate.",
       "source": "img2threejs/plugin-character",
       "access": "public",
-      "npmCli": null
+      "npmCli": "@img2threejs/character"
     },
     {
       "id": "cs2",
       "description": "Counter-Strike 2 weapon and glove skin reconstruction: intake contract, authoritative classification, finish/material recipes, and a blocking review gate.",
       "source": "img2threejs/plugin-cs2",
       "access": "public",
-      "npmCli": null
+      "npmCli": "@img2threejs/cs2"
     },
     {
       "id": "environment",
       "description": "Install and manage the private img2 environment plugin through the img2 harness. Authorized GitHub access is required.",
       "source": "img2threejs/plugin-environment",
       "access": "private",
-      "npmCli": "img2-environment"
+      "npmCli": "@img2threejs/environment"
     },
     {
       "id": "hello-cube",
