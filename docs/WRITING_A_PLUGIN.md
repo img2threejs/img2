@@ -169,6 +169,8 @@ img2 remove glb2threejs                     # when done
 1. Tag a semver release (`git tag -a v0.1.0 && git push --tags`) — `img2 add` resolves
    the newest tag by default and pins the SHA. An untagged repo installs from the default
    branch HEAD with a warning; don't ship that.
+   Protect `v*` tags with a repository tag ruleset before the plugin enters the public catalog
+   (`gh api repos/<org>/<repo>/rulesets` must list it): `img2 ensure` installs tags unprompted.
 2. Add the GitHub topic **`img2threejs-plugin`** — topic search is the ecosystem's only
    registry.
 3. Repos outside the `img2threejs` org install only with `--allow-any-source` — that is

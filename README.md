@@ -129,8 +129,22 @@ img2 doctor                     # audit again after changes
 img2 remove hello-cube          # unlink owned host links and back up the managed checkout
 ```
 
-Omit the ID from `img2 update` to inspect/update all registered plugins. `update --check`
+Omit the ID from `img2 update` to inspect/update the harness checkout and all registered
+plugins; `img2 update harness` handles only the harness. The harness checkout moves to the newest
+tag only when its origin is the official repository, it has no local changes, and it is behind
+that tag. `update --check`
 exits **1 when an update is pending**, and 0 when none is pending; no checkout is replaced.
+
+### Automatic plugin installation by agent skills
+
+`npx --yes @img2threejs/img2@latest install --yes --auto-install` additionally records your
+opt-in in `$IMG2_HOME/auto-install`. Afterwards an agent skill may run
+`img2 ensure <plugin-id>`, which only adds a missing **public** official plugin, never updates
+or replaces one, and accepts no options. Without the marker, or with `IMG2_AUTO_INSTALL=0`,
+`ensure` exits 3 and changes nothing. Delete the marker to opt out. The marker records your
+choice; it is not a security boundary. Agent skills are instructed never to write it, but an
+agent that can write files under `$IMG2_HOME` could create it, which is why `ensure` is limited
+to public official catalog plugins.
 Git updates follow the newest reachable semver tag. Local `--link` checkouts are live and
 are not fetched by `update`. Removal drops the registry row and its user-authored overrides;
 it does not delete the original source checkout of a local link.

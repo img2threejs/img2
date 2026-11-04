@@ -130,6 +130,9 @@ adopted the day a provider actually needs it, per the project's own CUT rule.
 - `img2 update [<id>] [--check]` re-resolves each row's source the same way `add` would
   (newest git tag, or newest npm version) and re-fetches it in place if it differs from
   `ref`; a `link:` row has nothing to fetch and is left untouched.
+- `img2 ensure <id>` adds a missing public catalog plugin exactly as `img2 add <id>` would and
+  never touches an existing row. It requires the `$IMG2_HOME/auto-install` opt-in marker, which records the human's choice
+  (written only by `install --auto-install`) but is not a security boundary.
 
 ### Reserved: `overrides`
 

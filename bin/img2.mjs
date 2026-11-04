@@ -90,6 +90,7 @@ const backupsDir = (H) => path.join(H, 'backups')
 const registryPath = (H) => path.join(H, 'plugins.json')
 const receiptsPath = (H) => path.join(H, 'receipts.json')
 const lockPath = (H) => path.join(H, '.lock')
+const autoInstallPath = (H) => path.join(H, 'auto-install')
 const cloneDir = (H, id) => path.join(pluginsDir(H), id)
 const linkName = (id) => LINK_PREFIX + id
 const localStanza = (H) => 'CORE = ' + JSON.stringify(harnessDir(H)) + '\n'
@@ -263,7 +264,8 @@ export function validateManifest(manifest, where) {
     throw new CliError(
       EXIT.FAIL,
       'plugin "' + manifest.name + '" requires harness "' + req.harness + '" but this harness is ' + harnessVersion(),
-      'blocked: a version mismatch can emit wrong geometry that passes visual gates by luck',
+      'blocked: a version mismatch can emit wrong geometry that passes visual gates by luck\n' +
+        'run `npx --yes @img2threejs/img2@latest update`',
     )
   }
   if (!Number.isInteger(req.coreApi)) fail('"requires.coreApi" must be an integer')
@@ -1213,9 +1215,11 @@ async function cmdInstall(opts) {
     } else {
       const src = opts.from ? path.resolve(opts.from) : HARNESS_REPO_URL
       if (opts.from && !fs.existsSync(src)) throw new CliError(EXIT.FAIL, '--from path does not exist: ' + src)
+      const tag = opts.from ? null : latestTagFor(src)
+      if (!tag && !opts.from) ui.warn('No semver tag reachable at ' + src + '; using HEAD of the default branch')
       ui.info('Cloning harness')
-      git(['clone', '-q', src, hd])
-      ui.ok('Harness cloned')
+      git(['clone', '-q', ...(tag ? ['--branch', tag] : []), src, hd])
+      ui.ok('Harness cloned' + (tag ? ' at ' + tag : ''))
     }
     ui.detail('Checkout', ui.path(hd))
     ui.step(3, 3, 'Configure agent access')
@@ -1229,6 +1233,11 @@ async function cmdInstall(opts) {
     } else {
       ui.info('Claude Code not detected; settings left unchanged')
     }
+    if (opts.autoInstall) {
+      fs.writeFileSync(autoInstallPath(H), new Date().toISOString() + ' official-public-catalog\n')
+      ui.ok('Opt-in recorded: `img2 ensure` may add missing public official catalog plugins')
+      ui.detail('Marker', ui.path(autoInstallPath(H)))
+    }
     ui.ok('Harness ready')
     return EXIT.OK
   } finally {
@@ -1240,14 +1249,58 @@ async function cmdInstall(opts) {
 // parse as semver). Shared by `add` (pick a ref when none is pinned) and `update` (decide whether a
 // newer tag exists).
 function latestTagFor(url) {
-  const tags = git(['ls-remote', '--tags', url])
+  return newestSemverTag(git(['ls-remote', '--tags', url])
     .split('\n')
     .map((line) => line.split('refs/tags/')[1])
-    .filter((t) => t && !t.endsWith('^{}'))
+    .filter((t) => t && !t.endsWith('^{}')))
+}
+
+function newestSemverTag(names) {
+  const tags = names
     .map((t) => ({ tag: t, key: parseSemver(t.replace(/^v/, '')) }))
     .filter((t) => t.key)
     .sort((a, b) => cmpSemver(b.key, a.key))
   return tags.length ? tags[0].tag : null
+}
+
+// Moves the harness checkout forward to `target` (default: newest semver tag on the official
+// remote), but only an official, clean checkout whose HEAD is a strict ancestor of that tag -- so a
+// local/dev checkout is never touched and nothing is ever downgraded. `check` reports without moving.
+function advanceHarness(H, target, check = false) {
+  const hd = harnessDir(H)
+  const skip = (reason) => ({ status: 'skipped', reason })
+  if (!fs.existsSync(hd) || !isGitRepo(hd)) return skip('no checkout')
+  let origin = ''
+  try {
+    origin = git(['config', '--get', 'remote.origin.url'], hd)
+  } catch { /* no origin: treated as local below */ }
+  if (origin.replace(/\.git$/, '') !== HARNESS_REPO_URL) return skip('local origin')
+  if (git(['status', '--porcelain'], hd)) return skip('dirty')
+  try {
+    git(['fetch', '--quiet', '--tags', 'origin'], hd)
+  } catch (err) {
+    return skip('fetch failed: ' + String(err.detail || err.message).split('\n')[0])
+  }
+  const tag = target || newestSemverTag(git(['tag', '--list'], hd).split('\n'))
+  if (!tag) return skip('no semver tag on origin')
+  let tagSha
+  try {
+    tagSha = git(['rev-parse', '--verify', '-q', 'refs/tags/' + tag + '^{commit}'], hd)
+  } catch {
+    return skip('tag ' + tag + ' not on origin')
+  }
+  const head = git(['rev-parse', 'HEAD'], hd)
+  let behind = false
+  try {
+    git(['merge-base', '--is-ancestor', head, tagSha], hd)
+    behind = head !== tagSha
+  } catch { /* exit 1: not an ancestor */ }
+  if (!behind) return skip('not behind ' + tag)
+  if (check) return { status: 'pending', tag }
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], hd)
+  git(['checkout', '-q', '--detach', 'refs/tags/' + tag], hd)
+  if (branch !== 'HEAD') ui.info('Harness checkout left branch "' + branch + '"; now detached at ' + tag)
+  return { status: 'updated', tag }
 }
 
 // Clears a stale leftover from a previous crashed run under the same pid and ensures the parent
@@ -1824,17 +1877,24 @@ async function cmdSync(opts) {
 async function cmdUpdate(opts, args) {
   const H = resolveImg2Home(opts.home)
   const onlyId = args[0] || null
-  ui.heading(opts.check ? 'Check plugin updates' : 'Update plugins')
-  ui.table(['Field', 'Value'], [['Home', ui.path(H)], ['Selection', onlyId || 'All registered plugins']])
+  const harnessOnly = onlyId === 'harness'
+  ui.heading(opts.check ? 'Check harness and plugin updates' : 'Update harness and plugins')
+  ui.table(['Field', 'Value'], [['Home', ui.path(H)], ['Selection', onlyId || 'Harness and all registered plugins']])
   acquireLock(H)
   let staging = null
   try {
-    const reg = readRegistry(H)
-    const rows = (onlyId ? reg.plugins.filter((r) => r.id === onlyId) : [...reg.plugins]).sort((a, b) => a.id.localeCompare(b.id))
-    if (onlyId && !rows.length) throw new CliError(EXIT.FAIL, 'no registered plugin "' + onlyId + '"')
-
     let updated = 0
     let pending = 0
+    if (!onlyId || harnessOnly) {
+      const h = advanceHarness(H, null, opts.check)
+      if (h.status === 'pending') pending += 1
+      ui.table(['Plugin', 'Status', 'Detail'], [['harness', h.status, h.tag || h.reason]], { statusColumn: 1 })
+    }
+
+    const reg = readRegistry(H)
+    const rows = harnessOnly ? [] : (onlyId ? reg.plugins.filter((r) => r.id === onlyId) : [...reg.plugins]).sort((a, b) => a.id.localeCompare(b.id))
+    if (onlyId && !harnessOnly && !rows.length) throw new CliError(EXIT.FAIL, 'no registered plugin "' + onlyId + '"')
+
     for (const row of rows) {
       if (row.repo.startsWith('link:')) {
         ui.table(['Plugin', 'Status', 'Ref', 'Source'], [[row.id, 'local', row.ref, row.repo]], { statusColumn: 1 })
@@ -1903,6 +1963,53 @@ async function cmdUpdate(opts, args) {
     if (staging) fs.rmSync(staging, { recursive: true, force: true })
     releaseLock()
   }
+}
+
+// The one command an agent skill may run unprompted, so it takes no options at all (main() refuses
+// any before reaching here): public catalog IDs only, add-only. The marker records the human's
+// `install --auto-install` opt-in; it is not a barrier against an agent that can write $IMG2_HOME.
+async function cmdEnsure(id) {
+  const H = resolveImg2Home(null)
+  const installHint = 'run: npx --yes @img2threejs/img2@' + harnessVersion() + ' install --yes --auto-install'
+  if (!fs.existsSync(harnessDir(H))) {
+    throw new CliError(EXIT.NEEDS_INPUT, 'no harness checkout at ' + harnessDir(H), installHint)
+  }
+  if (process.env.IMG2_AUTO_INSTALL === '0' || !fs.existsSync(autoInstallPath(H))) {
+    throw new CliError(EXIT.NEEDS_INPUT, 'automatic plugin installation is not enabled', installHint)
+  }
+  const catalog = await getCatalog()
+  const row = catalog.plugins.find((p) => p.id === id && p.access === 'public')
+  if (!row) {
+    throw new CliError(EXIT.REFUSED, '"' + id + '" is not a public official plugin ID', 'Run `img2 plugins` to see available IDs.')
+  }
+
+  const cli = harnessVersion()
+  let checkout = '0.0.0'
+  try {
+    checkout = JSON.parse(fs.readFileSync(path.join(harnessDir(H), 'package.json'), 'utf8')).version
+  } catch { /* unversioned checkout counts as behind */ }
+  if (cmpSemver(parseSemver(checkout) || [0, 0, 0], parseSemver(cli)) < 0) {
+    acquireLock(H)
+    let h
+    try {
+      h = advanceHarness(H, 'v' + cli)
+    } finally {
+      releaseLock()
+    }
+    if (h.status !== 'updated') {
+      throw new CliError(EXIT.FAIL, 'harness checkout ' + checkout + ' is older than this CLI ' + cli + ' and was not advanced: ' + h.reason)
+    }
+  }
+
+  const registered = findRow(readRegistry(H), id)
+  if (registered) {
+    console.log(id + ' already installed ' + registered.ref)
+    return EXIT.OK
+  }
+  await cmdAdd({ yes: true, plugin: id }, row.source)
+  const added = findRow(readRegistry(H), id)
+  console.log('ensured ' + id + ' ' + added.ref + ' ' + added.resolvedSha + ' profile-check: run forge/state.py init --help')
+  return EXIT.OK
 }
 
 // ---------------------------------------------------------------- capability resolution (§13)
@@ -2181,7 +2288,8 @@ const HELP_COMMANDS = [
   ['img2 add npm:<name>[@<version>]', 'Install a plugin package from npm'],
   ['img2 add --link <localpath>', 'Register a local checkout without cloning'],
   ['img2 list', 'List locally registered plugins'],
-  ['img2 update [<id>] [--check]', 'Update managed plugins or check for newer versions'],
+  ['img2 update [<id> | harness] [--check]', 'Update the harness checkout and managed plugins, or check for newer versions'],
+  ['img2 ensure <plugin-id>', 'Add a public catalog plugin if missing (needs install --auto-install; takes no options)'],
   ['img2 remove <id>', 'Remove registration and owned host links; keep a backup'],
   ['img2 doctor [--json]', 'Audit installation health without executing plugin code'],
   ['img2 sync [--check]', 'Regenerate indexes or check for drift'],
@@ -2199,6 +2307,7 @@ function printHelp() {
     ['--home <dir>', 'Use this absolute IMG2_HOME path'],
     ['--yes, -y', 'Never prompt'],
     ['--migrate-legacy', 'install: back up a legacy ~/.img2threejs/repo checkout'],
+    ['--auto-install', 'install: record your opt-in for `img2 ensure` (public official plugins only)'],
     ['--ref <ref>', 'add: select a tag or branch; default newest semver tag'],
     ['--link <path>', 'add: symlink a local plugin checkout'],
     ['--force', 'add: back up and replace an existing registration'],
@@ -2215,6 +2324,7 @@ function printHelp() {
   ui.table(['Variable', 'Purpose'], [
     ['IMG2_HOME', 'Harness home; default ~/.img2'],
     ['IMG2THREEJS_HOME', 'Deprecated alias; emits a warning'],
+    ['IMG2_AUTO_INSTALL', 'Set to 0 to disable `img2 ensure`'],
   ])
   ui.heading('Exit codes')
   ui.table(['Code', 'Meaning'], [
@@ -2232,6 +2342,7 @@ export function parseArgs(argv) {
     yes: false,
     force: false,
     migrateLegacy: false,
+    autoInstall: false,
     allowAnySource: false,
     check: false,
     fromKind: null,
@@ -2254,6 +2365,7 @@ export function parseArgs(argv) {
     else if (a === '--yes' || a === '-y') opts.yes = true
     else if (a === '--force') opts.force = true
     else if (a === '--migrate-legacy') opts.migrateLegacy = true
+    else if (a === '--auto-install') opts.autoInstall = true
     else if (a === '--allow-any-source') opts.allowAnySource = true
     else if (a === '--check') opts.check = true
     else if (a === '--json') opts.json = true
@@ -2280,6 +2392,7 @@ const COMMANDS = {
   list: (opts) => cmdList(opts),
   plugins: (opts, args) => cmdPlugins(opts, args),
   update: (opts, args) => cmdUpdate(opts, args),
+  ensure: (opts, args) => cmdEnsure(args[0]),
   doctor: (opts) => cmdDoctor(opts),
   sync: (opts) => cmdSync(opts),
   capabilities: (opts) => cmdCapabilities(opts),
@@ -2290,7 +2403,11 @@ async function main() {
     console.error('img2: needs Node ' + MIN_NODE + ' or newer, found ' + process.versions.node)
     return EXIT.FAIL
   }
-  const { command, opts, args } = parseArgs(process.argv.slice(2))
+  const argv = process.argv.slice(2)
+  const { command, opts, args } = parseArgs(argv)
+  if (command === 'ensure' && (argv.length !== 2 || argv[0] !== 'ensure' || !NAME_RE.test(argv[1]))) {
+    throw new CliError(EXIT.REFUSED, 'ensure takes exactly one official plugin ID and no options', 'usage: img2 ensure <plugin-id>')
+  }
   if (opts.showVersion) {
     if (opts.json) {
       console.log(JSON.stringify({

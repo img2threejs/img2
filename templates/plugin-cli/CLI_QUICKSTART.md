@@ -81,6 +81,9 @@ git push origin cli-v0.1.1
 Stable CLI versions use npm's `latest` channel. Plugin source tags `vX.Y.Z` remain separate
 from CLI release tags `cli-vX.Y.Z`.
 
+Release checklist: the source repository has a tag ruleset on `v*`
+(`gh api repos/{{SOURCE}}/rulesets` lists it) before its catalog row is public.
+
 For a private source repository, generate with `--private-repo`; provenance must be
 `false`, even though the npm installer is public. Private plugin Git access is still
 required by users. Restrict repository write and release-tag creation to maintainers.

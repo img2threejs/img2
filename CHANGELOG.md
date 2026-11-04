@@ -11,8 +11,31 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-04
+
+### Added
+
+- `img2 ensure <plugin-id>`: adds a **public** official catalog plugin when it is missing and
+  prints `ensured <id> <ref> <sha> …`, or `<id> already installed <ref>`. It never updates a
+  plugin, accepts no options at all (any option or second argument exits 2 before any change),
+  and runs only when the opt-in marker `$IMG2_HOME/auto-install` exists; otherwise it exits 3.
+  `IMG2_AUTO_INSTALL=0` disables it. It first advances the harness checkout to the running CLI
+  version and exits 1 if it cannot (including a failed fetch).
+- `img2 install --auto-install` writes that marker; plain `install` never does. The marker records
+  the human's choice; it is not a security boundary. Agent skills are instructed never to write
+  it, but an agent with write access to `$IMG2_HOME` could, so `ensure` stays limited to public
+  official catalog plugins.
+
 ### Changed
 
+- A fresh `img2 install` checks out the newest harness semver tag (detached) instead of the
+  default branch (`git clone --branch <tag>`). An existing checkout is kept.
+- `img2 update` (all, or `img2 update harness`) first fetches tags and moves the harness
+  checkout to the newest tag, only when its origin is the official repository, it is clean, and
+  HEAD is an ancestor of that tag; otherwise it reports why it was skipped (including a failed
+  fetch, which no longer stops plugin updates). Leaving a branch for a detached tag is announced.
+  `--check` counts a pending harness move.
+- A `requires.harness` mismatch names `npx --yes @img2threejs/img2@latest update` as the fix.
 - Official standalone installers use the `@img2threejs` npm organization:
   `@img2threejs/character`, `@img2threejs/cs2`, and `@img2threejs/environment`.
   The live catalog links these installer packages; bare-ID `add` still uses Git.
