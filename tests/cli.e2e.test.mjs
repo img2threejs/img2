@@ -1134,6 +1134,9 @@ test('add blocks version and schema mismatches naming both sides', (t) => {
   assert.equal(r.status, 1, r.stderr + r.stdout)
   assert.match(r.stderr, />=99\.0\.0/)
   assert.ok(r.stderr.includes(harnessVersion()), r.stderr)
+  assert.ok(r.stderr.includes('npx --yes @img2threejs/img2@latest update'), r.stderr)
+  r = run(['--version', '--json'], sb.env, sb.root)
+  assert.ok(JSON.parse(r.stdout).commands.includes('ensure'), r.stdout)
 
   const wrongCore = makePluginRepo(sb.root, 'wrong-core', { manifest: { requires: { harness: '>=0.1.0', coreApi: 2 } } })
   r = run(['add', 'file://' + wrongCore, '--allow-any-source', '--yes'], sb.env, sb.root)

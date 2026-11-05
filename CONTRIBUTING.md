@@ -18,6 +18,9 @@ Two kinds of contribution, two paths:
 - The harness never imports or executes plugin code; every check on plugins is static.
 - Code comments only for constraints the code cannot express.
 - Exit codes are API: `{OK:0, FAIL:1, REFUSED:2, NEEDS_INPUT:3}` — don't invent new ones.
+- `img2 ensure` stays flagless: it is the one command agent skills may run without a prompt,
+  so it takes exactly one public catalog ID. Never add an option to it; `tests/ensure.test.mjs`
+  asserts every option is refused.
 
 ## Tests
 
