@@ -11,7 +11,7 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ## [Unreleased]
 
-## [0.5.0] — 2026-11-04
+## [0.5.0] — 2026-11-05
 
 ### Added
 
