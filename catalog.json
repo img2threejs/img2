@@ -29,6 +29,13 @@
       "source": "img2threejs/plugin-jev",
       "access": "private",
       "npmCli": null
+    },
+    {
+      "id": "pixi2d",
+      "description": "Explicit 2D image reconstruction in the existing PixiJS host with editable nodes and a blocking, evidence-bound review gate.",
+      "source": "img2threejs/plugin-pixi2d",
+      "access": "public",
+      "npmCli": null
     }
   ]
 }

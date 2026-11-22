@@ -88,6 +88,7 @@ anything and can run before harness setup. `list` reads your local registry.
 | [cs2](https://github.com/img2threejs/plugin-cs2) | Counter-Strike 2 weapon/glove skin reconstruction and review gates | Public | `img2 add cs2 --yes` |
 | [interior](https://github.com/img2threejs/plugin-interior) | Image/reference to an interior scene: Blender authoring, PBR, render/repair and verified delivery | Public | `img2 add interior --yes` |
 | jev | Bounded image-aware decision advisories and repair advice; never acceptance authority | **Private — authorized Git access required** | `img2 add jev --yes` |
+| [pixi2d](https://github.com/img2threejs/plugin-pixi2d) | Explicit 2D image reconstruction in PixiJS with editable nodes and a blocking review gate | Public | `img2 add pixi2d --yes` |
 
 The table lists announced plugins; use `img2 plugins` for the current catalog. You do not
 need to install all of them. For a small first installation:

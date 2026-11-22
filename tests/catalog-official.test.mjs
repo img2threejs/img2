@@ -4,10 +4,7 @@ import fs from 'node:fs'
 import { getCatalog } from '../bin/catalog.mjs'
 
 const APPROVED = ['character', 'cs2', 'interior', 'jev', 'pixi2d']
-// Approved but not yet listable: pixi2d's only remote is img2threejs/pixi2d (outside the
-// required `img2threejs/plugin-*` source shape) and carries no plugin.json on its main branch.
-// Empty this list once a conforming source is published and added to catalog.json.
-const PENDING = ['pixi2d']
+const PENDING = []
 
 const text = fs.readFileSync(new URL('../catalog.json', import.meta.url), 'utf8')
 const catalog = () => getCatalog({ fetchImpl: async () => new Response(text, { status: 200 }) })

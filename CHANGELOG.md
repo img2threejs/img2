@@ -13,10 +13,11 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Changed
 
-- Official catalog now lists exactly the approved plugins: `character`, `cs2`, `interior` and
-  `jev`. `environment`, `hello-cube` and `img2glb` are removed, so `img2 add`/`img2 ensure` of those
+- Official catalog now lists exactly the approved plugins: `character`, `cs2`, `interior`, `jev` and
+  `pixi2d`. `environment`, `hello-cube` and `img2glb` are removed, so `img2 add`/`img2 ensure` of those
   IDs now exit 2 (unknown official plugin); explicit `org/repo`, URL, npm and `--link` sources still work.
-  `pixi2d` is approved but not yet listed: it has no `img2threejs/plugin-pixi2d` source.
+  `pixi2d` becomes installable once img2threejs/plugin-pixi2d#1 is merged (its main branch carries no
+  `plugin.json` before that).
 
 ## [0.5.0] — 2026-11-05
 
