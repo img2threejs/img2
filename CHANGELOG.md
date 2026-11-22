@@ -20,7 +20,18 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   Entries are `resolved` or `unresolved` with a reason; unresolved ones (mostly artifacts whose registry
   publishes no SHA-256) must be resolved before a release.
 - `plugins.lock.json` (schema 1): pinned commit, capability name, visibility and default-on selection for
-  each approved plugin. `bin/locks.mjs` validates both files; no installer reads them yet.
+  each approved plugin. `bin/locks.mjs` validates both files.
+- `img2 provision`: reads the locks and installs every runtime dependency under
+  `$IMG2_HOME/runtime/<lock digest>/<environment>/`, one atomic unit per environment (separate bpy 4.5.15 and
+  4.3.0 venvs, hash-pinned pip wheels, npm roots from SRI-verified tarballs, Chromium through the pinned
+  Playwright CLI, Source2Viewer-CLI, .NET, vision, MCP servers). `--plan` prints sizes and writes nothing;
+  one confirmation (`--yes` skips it; a non-TTY without `--yes` exits 2); `--profile minimal`, `--plugins`,
+  `--skip <id>`, `--offline`, `--allow-weak-hash`, `--remove`. Writes `selectors.json` (0600, atomic),
+  `env.sh` and a `provision.json` receipt.
+- `img2 doctor --runtime [--json]`: bounded probes that prove bpy imports in both environments, NumPy/Pillow
+  work, Node imports Three, headless Chromium renders WebGL, gltf-validator accepts a GLB, Source2Viewer-CLI
+  runs, the vision stack infers and each MCP server answers `initialize`; skipped, Jev-login and CS2-VPK
+  conditions are reported apart from failures.
 
 ### Changed
 

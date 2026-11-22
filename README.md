@@ -106,6 +106,26 @@ does **not** run a reconstruction. `doctor` is a static installation audit, not 
 quality or reconstruction acceptance check. `sync --check` verifies that generated files
 match the registered manifests.
 
+#### Runtime dependencies
+
+`img2 provision` installs and verifies everything the plugins run on (Blender `bpy` in two separate
+environments, Playwright + Chromium, Three, NumPy/Pillow, Source2Viewer-CLI + .NET, the vision stack and the
+MCP servers) from `dependencies.lock.json` into `$IMG2_HOME/runtime/`:
+
+```bash
+img2 provision --plan            # sizes per environment; writes nothing
+img2 provision                   # one confirmation (default yes); --yes skips it
+img2 provision --minimal         # no vision, MCP servers or extra browsers
+img2 provision --plugins character,jev --skip cs2-dotnet-runtime
+img2 doctor --runtime            # proves each piece works; non-zero exit on any failure
+img2 provision --remove          # removes only what provisioning created
+```
+
+Artifacts are verified against the lock before use (SHA-256, or SHA-512 SRI for npm and .NET); entries
+the lock pins only by MD5/CRC32C/git SHA-1 (Playwright browser bundles, some model files) are refused
+unless `--allow-weak-hash`, which records a locally computed SHA-256 in `provision.json`. Exit codes: 0 ok,
+1 failed step or red doctor, 2 refused before running, 3 declined. Windows is refused.
+
 ### 4. Use the installed plugin in your agent
 
 Start a new agent session, or restart the current one, so updated skills are loaded.
