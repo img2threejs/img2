@@ -55,7 +55,7 @@ If `img2` is not found, or its version is older than 0.4.0, use the latest CLI d
 
 ```bash
 npx --yes @img2threejs/img2@latest plugins
-npx --yes @img2threejs/img2@latest add hello-cube --yes
+npx --yes @img2threejs/img2@latest add cs2 --yes
 ```
 
 For short commands that always use the latest published CLI, set this **bash/zsh alias**:
@@ -86,15 +86,14 @@ anything and can run before harness setup. `list` reads your local registry.
 |---|---|---|---|
 | [character](https://github.com/img2threejs/plugin-character) | Character rigging, skin conditioning, animation and rig gates | Public | `img2 add character --yes` |
 | [cs2](https://github.com/img2threejs/plugin-cs2) | Counter-Strike 2 weapon/glove skin reconstruction and review gates | Public | `img2 add cs2 --yes` |
-| [environment](https://github.com/img2threejs/plugin-environment) | The environment plugin, distributed from a private repository | **Private — authorized Git access required** | `img2 add environment --yes` |
-| [hello-cube](https://github.com/img2threejs/plugin-hello-cube) | A small deterministic image-to-Three.js cube example | Public | `img2 add hello-cube --yes` |
-| [img2glb](https://github.com/img2threejs/plugin-img2glb) | Image-to-GLB mesh generation through the hosted TRELLIS space | Public | `img2 add img2glb --yes` |
+| [interior](https://github.com/img2threejs/plugin-interior) | Image/reference to an interior scene: Blender authoring, PBR, render/repair and verified delivery | Public | `img2 add interior --yes` |
+| jev | Bounded image-aware decision advisories and repair advice; never acceptance authority | **Private — authorized Git access required** | `img2 add jev --yes` |
 
 The table lists announced plugins; use `img2 plugins` for the current catalog. You do not
 need to install all of them. For a small first installation:
 
 ```bash
-img2 add hello-cube --yes
+img2 add cs2 --yes
 img2 list
 img2 doctor
 img2 sync --check
@@ -113,8 +112,8 @@ Open the plugin's linked README above for its inputs, setup and workflow; follow
 `SKILL.md` and tool instructions for the actual task. For example, ask your agent:
 
 ```text
-Use the hello-cube skill with ./reference.png. Follow the plugin's instructions,
-produce the Three.js output, and report the output files and checks performed.
+Use the cs2 skill with ./reference.png. Follow the plugin's instructions,
+produce the reconstruction output, and report the output files and checks performed.
 ```
 
 The harness manages installation and capability lookup. It does not generate a model just
@@ -123,10 +122,10 @@ because a plugin was added, and it does not replace each plugin's usage instruct
 ### 5. Check for updates, update or remove a plugin
 
 ```bash
-img2 update hello-cube --check   # check this plugin without replacing it
-img2 update hello-cube           # install a newer available version
+img2 update cs2 --check   # check this plugin without replacing it
+img2 update cs2           # install a newer available version
 img2 doctor                     # audit again after changes
-img2 remove hello-cube          # unlink owned host links and back up the managed checkout
+img2 remove cs2          # unlink owned host links and back up the managed checkout
 ```
 
 Omit the ID from `img2 update` to inspect/update the harness checkout and all registered
@@ -158,7 +157,6 @@ The standalone installers are public packages in the
 |---|---|---|
 | character | [@img2threejs/character](https://www.npmjs.com/package/@img2threejs/character) | `npx --yes @img2threejs/character install --yes` |
 | cs2 | [@img2threejs/cs2](https://www.npmjs.com/package/@img2threejs/cs2) | `npx --yes @img2threejs/cs2 install --yes` |
-| environment | [@img2threejs/environment](https://www.npmjs.com/package/@img2threejs/environment) | `npx --yes @img2threejs/environment install --yes` |
 
 Run the same command with `--dry-run` instead of `--yes` to preview without writes.
 Use `doctor` to audit the installation, `update --check` to check plugin releases, and
@@ -167,34 +165,8 @@ plugin source is fetched separately at the package's immutable commit pin. They 
 `@img2threejs/img2@0.4.0` and do not run a reconstruction.
 
 The npm package name and executable differ: a global installation of
-`@img2threejs/cs2` provides `img2-cs2`, and likewise for character/environment.
+`@img2threejs/cs2` provides `img2-cs2`, and likewise for character.
 `img2 add <id>` still resolves the plugin's Git source, not its npm installer.
-
-### Private environment plugin
-
-The [environment source](https://github.com/img2threejs/plugin-environment) requires a
-GitHub account with repository access and working Git credentials. A private GitHub link
-may appear as 404 when you are signed out or lack permission. The public
-[`@img2threejs/environment` npm installer](https://www.npmjs.com/package/@img2threejs/environment) does
-**not** grant access to that source.
-
-With the harness installed and Git access configured:
-
-```bash
-img2 add environment --yes
-img2 doctor
-```
-
-Alternatively, the standalone installer can preview an installation without changes and
-bootstrap the harness when installing:
-
-```bash
-npx --yes @img2threejs/environment install --dry-run
-npx --yes @img2threejs/environment install --yes
-```
-
-The organization installer pins SDK `0.4.0` and plugin source commit `c19f5f2`.
-Newer local environment development is not included in this installer.
 
 ### Refs, replacement and common refusals
 
@@ -213,13 +185,13 @@ Newer local environment development is not included in this installer.
 For a ref-pinned install, use a real ref from that plugin's repository:
 
 ```bash
-img2 add hello-cube --ref main --yes
+img2 add cs2 --ref main --yes
 ```
 
 Only when you deliberately want to replace an existing registration:
 
 ```bash
-img2 add environment --force --yes
+img2 add cs2 --force --yes
 ```
 
 `--force` backs up the previous managed checkout or mount before replacement. If the

@@ -2283,7 +2283,7 @@ async function cmdPlugins(opts, args) {
 const HELP_COMMANDS = [
   ['img2 install', 'Set up the harness and supported agent hosts'],
   ['img2 plugins [--json]', 'Discover officially announced plugins'],
-  ['img2 add <plugin-id>', 'Install by catalog ID: environment, character, cs2, hello-cube, img2glb'],
+  ['img2 add <plugin-id>', 'Install by catalog ID: character, cs2, interior, jev'],
   ['img2 add <org/repo | url>', 'Install directly from a Git repository'],
   ['img2 add npm:<name>[@<version>]', 'Install a plugin package from npm'],
   ['img2 add --link <localpath>', 'Register a local checkout without cloning'],

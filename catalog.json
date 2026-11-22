@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-10",
+  "updatedAt": "2026-11-22",
   "plugins": [
     {
       "id": "character",
@@ -17,24 +17,17 @@
       "npmCli": "@img2threejs/cs2"
     },
     {
-      "id": "environment",
-      "description": "Install and manage the private img2 environment plugin through the img2 harness. Authorized GitHub access is required.",
-      "source": "img2threejs/plugin-environment",
-      "access": "private",
-      "npmCli": "@img2threejs/environment"
-    },
-    {
-      "id": "hello-cube",
-      "description": "Turn an image into a deterministic Three.js cube (contract exerciser)",
-      "source": "img2threejs/plugin-hello-cube",
+      "id": "interior",
+      "description": "Agent-operated image/reference analysis, Poly Haven acquisition, Blender/Python authoring and PBR, render/repair, bake/export, Three.js interaction and verified native/runtime/portable delivery.",
+      "source": "img2threejs/plugin-interior",
       "access": "public",
       "npmCli": null
     },
     {
-      "id": "img2glb",
-      "description": "Turn an image into a GLB 3D mesh via the hosted TRELLIS space",
-      "source": "img2threejs/plugin-img2glb",
-      "access": "public",
+      "id": "jev",
+      "description": "Bounded four-purpose image-aware decision advisories plus legacy Environment checkpoint and repair advice; never acceptance authority.",
+      "source": "img2threejs/plugin-jev",
+      "access": "private",
       "npmCli": null
     }
   ]
