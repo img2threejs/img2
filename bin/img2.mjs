@@ -9,6 +9,9 @@ import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { ui } from './ui.mjs'
 import { CATALOG_URL, getCatalog } from './catalog.mjs'
+import { Refusal as ProvisionRefusal } from './runtime/errors.mjs'
+import { realDeps, runProvision } from './runtime/provision.mjs'
+import { runDoctorRuntime } from './runtime/doctor.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
@@ -1590,7 +1593,29 @@ async function cmdList(opts) {
   return EXIT.OK
 }
 
+// Runtime provisioning is its own module tree (bin/runtime); here it only gets argv, home and exit codes.
+async function cmdProvision(opts) {
+  const deps = realDeps()
+  if (opts.json) deps.out = (line) => process.stdout.write(line + '\n')
+  try {
+    return await runProvision(opts, resolveImg2Home(opts.home), deps)
+  } catch (e) {
+    if (e instanceof ProvisionRefusal) throw new CliError(e.code, e.message, e.detail)
+    throw e
+  }
+}
+
+async function cmdDoctorRuntime(opts) {
+  try {
+    return await runDoctorRuntime({ home: resolveImg2Home(opts.home), json: opts.json, deps: realDeps() })
+  } catch (e) {
+    if (e instanceof ProvisionRefusal) throw new CliError(e.code, e.message, e.detail)
+    throw e
+  }
+}
+
 async function cmdDoctor(opts) {
+  if (opts.runtime) return cmdDoctorRuntime(opts)
   const H = resolveImg2Home(opts.home)
   const findings = []
   const err = (plugin, msg) => findings.push({ level: 'FAIL', plugin, msg })
@@ -2292,6 +2317,9 @@ const HELP_COMMANDS = [
   ['img2 ensure <plugin-id>', 'Add a public catalog plugin if missing (needs install --auto-install; takes no options)'],
   ['img2 remove <id>', 'Remove registration and owned host links; keep a backup'],
   ['img2 doctor [--json]', 'Audit installation health without executing plugin code'],
+  ['img2 provision [--plan] [--yes] [--profile full|minimal] [--plugins a,b] [--skip <id>] [--offline]', 'Install and verify every runtime dependency (bpy, Chromium, three, vision, CS2, MCP) under $IMG2_HOME/runtime'],
+  ['img2 provision --remove', 'Remove the provisioned runtime, cache and selectors (only what provisioning created)'],
+  ['img2 doctor --runtime [--json]', 'Prove each provisioned runtime piece works with bounded probes (executes installed tools)'],
   ['img2 sync [--check]', 'Regenerate indexes or check for drift'],
   ['img2 capabilities [--from-kind <kind>] [--to-kind <kind>] [--plugin <id>]', 'Query providers; output is always JSON'],
   ['img2 --version [--json]', 'Show harness and contract versions'],
@@ -2316,7 +2344,15 @@ function printHelp() {
     ['--from-kind <kind>', 'capabilities: source kind'],
     ['--to-kind <kind>', 'capabilities: destination kind'],
     ['--plugin <id>', 'add: require this identity; capabilities: select this provider'],
-    ['--json', 'version/doctor/plugins: machine-readable output; capabilities: implied'],
+    ['--json', 'version/doctor/plugins/provision --plan: machine-readable output; capabilities: implied'],
+    ['--plan', 'provision: print the plan and sizes, write nothing'],
+    ['--profile <full|minimal>, --minimal', 'provision: full (default) or minimal (no vision, MCP or extra browsers)'],
+    ['--plugins <a,b,c>', 'provision: install only these plugins (default: all five)'],
+    ['--skip <dependency-id>', 'provision: disable a dependency and everything needing it (repeatable)'],
+    ['--offline', 'provision: use only the verified download cache'],
+    ['--allow-weak-hash', 'provision: accept artifacts the lock pins only by MD5/CRC32C/git SHA-1; records a local SHA-256'],
+    ['--remove', 'provision: remove the provisioned runtime'],
+    ['--runtime', 'doctor: probe the provisioned runtime instead of the installation'],
     ['--version, -v', 'Show version and exit'],
     ['--help, -h', 'Show help and exit'],
   ])
@@ -2349,6 +2385,15 @@ export function parseArgs(argv) {
     toKind: null,
     plugin: null,
     json: false,
+    plan: false,
+    profile: null,
+    minimal: false,
+    plugins: null,
+    skip: null,
+    offline: false,
+    allowWeakHash: false,
+    remove: false,
+    runtime: false,
     help: false,
     showVersion: false,
   }
@@ -2369,6 +2414,15 @@ export function parseArgs(argv) {
     else if (a === '--allow-any-source') opts.allowAnySource = true
     else if (a === '--check') opts.check = true
     else if (a === '--json') opts.json = true
+    else if (a === '--plan') opts.plan = true
+    else if (a === '--minimal') opts.minimal = true
+    else if (a === '--offline') opts.offline = true
+    else if (a === '--allow-weak-hash') opts.allowWeakHash = true
+    else if (a === '--remove') opts.remove = true
+    else if (a === '--runtime') opts.runtime = true
+    else if (a === '--profile') opts.profile = take(a, argv[++i])
+    else if (a === '--plugins') opts.plugins = take(a, argv[++i])
+    else if (a === '--skip') (opts.skip ??= []).push(take(a, argv[++i]))
     else if (a === '--home') opts.home = take(a, argv[++i])
     else if (a === '--from') opts.from = take(a, argv[++i])
     else if (a === '--ref') opts.ref = take(a, argv[++i])
@@ -2394,6 +2448,7 @@ const COMMANDS = {
   update: (opts, args) => cmdUpdate(opts, args),
   ensure: (opts, args) => cmdEnsure(args[0]),
   doctor: (opts) => cmdDoctor(opts),
+  provision: (opts) => cmdProvision(opts),
   sync: (opts) => cmdSync(opts),
   capabilities: (opts) => cmdCapabilities(opts),
 }

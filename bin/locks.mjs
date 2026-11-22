@@ -16,7 +16,7 @@ function* artifactsOf(entry) {
   for (const t of entry.transitive ?? []) for (const a of t.artifacts ?? []) yield [`${entry.id}>${t.name}@${t.version}`, a]
 }
 
-export function validateDependenciesLock(lock) {
+export function validateDependenciesLock(lock, { invariants = true } = {}) {
   const errors = []
   const err = m => errors.push(m)
   if (!isObject(lock)) return ['lock must be a JSON object']
@@ -87,7 +87,7 @@ export function validateDependenciesLock(lock) {
 
   const cycle = findCycle(byId)
   if (cycle) err(`requires cycle: ${cycle.join(' > ')}`)
-  errors.push(...invariantErrors(byId))
+  if (invariants) errors.push(...invariantErrors(byId))
   return errors
 }
 
