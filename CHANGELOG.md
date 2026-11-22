@@ -11,6 +11,17 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ## [Unreleased]
 
+### Added
+
+- `dependencies.lock.json` (schema 1): pinned install manifest for everything `img2threejs` needs (separate
+  character bpy 4.5.15 and interior bpy 4.3.0 environments, NumPy/Pillow, Three 0.186.1 and the interior
+  viewer's 0.180.0, Playwright 1.64.0 + Chromium, Node >=22, pixi.js, Vite, gltf-validator, esbuild,
+  Source2Viewer-CLI + .NET, the vision stack and models, MCP servers) with `full` and `minimal` profiles.
+  Entries are `resolved` or `unresolved` with a reason; unresolved ones (mostly artifacts whose registry
+  publishes no SHA-256) must be resolved before a release.
+- `plugins.lock.json` (schema 1): pinned commit, capability name, visibility and default-on selection for
+  each approved plugin. `bin/locks.mjs` validates both files; no installer reads them yet.
+
 ### Changed
 
 - Official catalog now lists exactly the approved plugins: `character`, `cs2`, `interior`, `jev` and

@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-11-22",
+  "defaultInstall": "all",
+  "plugins": [
+    {
+      "id": "character",
+      "capability": "rigged character",
+      "repo": "https://github.com/img2threejs/plugin-character",
+      "commit": "88854a4117ad32f9b168d3f14425794ae339d414",
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "unpushed-local",
+      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is 377ddf8. Push or re-pin before bundling"
+    },
+    {
+      "id": "cs2",
+      "capability": "CS2 skin",
+      "repo": "https://github.com/img2threejs/plugin-cs2",
+      "commit": "ea41cb608ff5428cc34fba63b3c8e8b6049e2e03",
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "unpushed-local",
+      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is b62f904. Push or re-pin before bundling"
+    },
+    {
+      "id": "interior",
+      "capability": "interior scene",
+      "repo": "https://github.com/img2threejs/plugin-interior",
+      "commit": "1d2f2a93713a2f7658822c89dcd305b136cc54e1",
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "unpushed-local",
+      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is f2c3667. Push or re-pin before bundling"
+    },
+    {
+      "id": "jev",
+      "capability": "Jev decisions",
+      "repo": "https://github.com/img2threejs/plugin-jev",
+      "commit": "ea15e4b0748f6af266c5b956041d974d1c01002f",
+      "visibility": "private",
+      "selectable": true,
+      "default": true,
+      "pinState": "unpushed-local",
+      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is origin/. Push or re-pin before bundling"
+    },
+    {
+      "id": "pixi2d",
+      "capability": "2D scene",
+      "repo": "https://github.com/img2threejs/plugin-pixi2d",
+      "commit": "de1e6e0b5e4902034895c440f9b2f9d458c48c8c",
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/chore/apache-license), not on origin/main (47c8c5a); merge or re-pin before a release"
+    }
+  ]
+}

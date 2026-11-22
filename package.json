@@ -21,6 +21,8 @@
     "img2_core",
     "docs",
     "templates",
+    "dependencies.lock.json",
+    "plugins.lock.json",
     "!**/__pycache__/**",
     "!**/*.pyc",
     "!**/.omc/**"
