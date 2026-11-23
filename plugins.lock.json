@@ -5,7 +5,7 @@
   "core": {
     "id": "core",
     "repo": "https://github.com/img2threejs/img2threejs",
-    "commit": "95e9c2a5a0caa8fae2fb25044428b122925f34a4",
+    "commit": "9886a1be4c9b98f27ed93bf0e3ada0940e118693",
     "branch": "feat/textured-routing-install",
     "pinState": "on-origin",
     "note": "commit is origin/feat/textured-routing-install HEAD (git ls-remote 2026-11-23), not on origin/main; merge or re-pin before a release"
