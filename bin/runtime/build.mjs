@@ -13,7 +13,7 @@ import { threeInventoryDigest } from './selectors.mjs'
 import { probeSource } from './probe-source.mjs'
 import { browsersOf, cliRootOf, nodeRootOf, venvPython } from './probes.mjs'
 
-export const PROVISION_SCHEMA = 1
+export const PROVISION_SCHEMA = 2 // 2: unit metadata carries the artifact/tree hash evidence; units built without it are rebuilt
 
 const PW_BROWSER_NAMES = { chromium: 'chromium', 'chromium-headless-shell': 'chromium-headless-shell', firefox: 'firefox', webkit: 'webkit' }
 

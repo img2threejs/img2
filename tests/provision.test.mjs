@@ -186,6 +186,38 @@ test('weak-hash artifacts are refused with exit 2 unless --allow-weak-hash, whic
   assert.ok(receipt.steps.some((s) => s.kind === 'browser-tree' && /^[0-9a-f]{64}$/.test(s.treeSha256)), 'browser tree sha256 recorded')
 })
 
+test('a re-run that reuses every unit still reports the hashes of the installed weak-pin bytes', async () => {
+  const blob = Buffer.from('{"config": true}')
+  const fx = makeFixture({
+    mutate: (lock, bytes) => {
+      const url = 'https://huggingface.example.test/config.json'
+      bytes.set(url, blob)
+      lock.dependencies.push({
+        id: 'vision-model-config', environment: 'vision', kind: 'model', name: 'cfg', version: 'rev', group: 'vision', consumers: ['vision'], requires: ['vision-torch'],
+        probe: 'vision-offline-inference', ownership: 'harness', constraints: { platforms: [PLATFORM] }, exports: [], status: 'unresolved', reason: { code: 'x', reason: 'y' },
+        artifacts: [{ platform: 'any', filename: 'config.json', url, size: blob.length, gitBlobSha1: require_sha1('blob ' + blob.length + '\0', blob) }],
+      })
+      lock.profiles.full.dependencies.push('vision-model-config')
+    },
+  })
+  const first = makeDeps(fx)
+  assert.equal(await runProvision(baseOpts({ allowWeakHash: true }), first.home, first), EXIT.OK)
+  let home = first.home
+  for (let run = 2; run <= 3; run += 1) {
+    const again = makeDeps(fx, { home })
+    assert.equal(await runProvision(baseOpts({ allowWeakHash: true }), again.home, again), EXIT.OK)
+    const receipt = readJson(path.join(rt(again), 'provision.json'))
+    assert.ok(receipt.units.every((u) => u.reused), 'run ' + run + ' reuses every unit')
+    const rows = receipt.steps.filter((s) => s.kind === 'artifact' && s.dependency === 'vision-model-config')
+    assert.equal(rows.length, 1, 'run ' + run + ' carries the artifact hash row forward')
+    assert.equal(rows[0].sha256, sha256(blob))
+    assert.equal(rows[0].weak, 'git SHA-1')
+    assert.equal(rows[0].carriedForward, true)
+    assert.ok(receipt.steps.some((s) => s.kind === 'browser-tree' && /^[0-9a-f]{64}$/.test(s.treeSha256)), 'browser tree hash carried forward')
+    assert.ok(receipt.weakArtifacts.some((w) => w.dependency === 'vision-model-config' && w.sha256 === sha256(blob) && w.weak === 'git SHA-1'))
+  }
+})
+
 function require_sha1(head, body) { return crypto.createHash('sha1').update(head).update(body).digest('hex') }
 
 test('a git blob that does not match its pinned SHA-1 is refused even with --allow-weak-hash', async () => {

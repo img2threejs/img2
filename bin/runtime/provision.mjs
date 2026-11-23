@@ -17,6 +17,9 @@ export const runtimeRootOf = (home) => path.join(home, 'runtime')
 export const managedPythonPath = (home, lockDigest) => path.join(runtimeRootOf(home), lockDigest.slice(0, 12), 'runtime', 'python-runtime', 'bin', 'python3')
 const OWNED_FILES = ['selectors.json', 'env.sh', 'provision.json', '.provision.lock']
 const DIGEST_DIR = /^[0-9a-f]{12}$/
+// Receipt rows that identify installed bytes (artifact SHA-256 incl. the weak-pin ones, browser trees). They are stored in
+// each unit's own metadata at build time so a later run that reuses the unit can still report them.
+const EVIDENCE_KINDS = new Set(['artifact', 'browser-tree', 'browser-cache'])
 
 export function realDeps() {
   return {
@@ -296,6 +299,8 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
           row.reused = true; row.probes = checks; row.exports = existing.exports
           Object.assign(exportsAll, absExports(finalDir, existing.exports, unit))
           ctx.record({ kind: 'reuse', unit: unit.name, fingerprint })
+          // the bytes were hashed when the unit was built, not now: carry that evidence into this run's receipt
+          for (const e of existing.evidence ?? []) ctx.record({ ...e, carriedForward: true })
           out('    reused (verified)')
           continue
         }
@@ -306,7 +311,9 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
       rmrf(stage)
       ensureDir(stage)
       try {
+        const receiptsBefore = receipts.length
         const { exports, waivers } = await buildUnit(ctx, unit, stage, cliDep)
+        const evidence = receipts.slice(receiptsBefore).filter((r) => EVIDENCE_KINDS.has(r.kind)).map(({ at, carriedForward, ...rest }) => rest)
         if (waivers.length) row.waivers = waivers
         const checks = await runProbes(pctxFor(ctx, stage, selection), unit.deps)
         row.probes = checks
@@ -314,7 +321,7 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
         if (bad.length) throw new StepError('probe failed for ' + unit.name, bad.map((c) => c.id + ' (' + c.dependency + '): expected ' + c.expected + '; actual ' + c.actual + (c.stderr ? '\n' + c.stderr : '')).join('\n'))
         const declared = declaredExports(unit)
         const kept = Object.fromEntries(Object.entries(exports).filter(([k]) => declared.has(k)))
-        atomicWriteJson(path.join(stage, '.img2-unit.json'), { schema: PROVISION_SCHEMA, fingerprint, dependencies: row.dependencies, exports: kept, builtAt: deps.now().toISOString() }, 0o644)
+        atomicWriteJson(path.join(stage, '.img2-unit.json'), { schema: PROVISION_SCHEMA, fingerprint, dependencies: row.dependencies, exports: kept, evidence, builtAt: deps.now().toISOString() }, 0o644)
         const parked = activate(stage, finalDir, path.join(rollbackDir(rtDir), parkedName(unit.name)))
         activated.push({ name: unit.name, finalDir, parked })
         retargetVenv(stage, finalDir)
@@ -347,6 +354,7 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
     writeEnvSh(runtimeRoot, selectors, extra)
     rmrf(rollbackDir(rtDir)) // every unit and the selectors are in place: the previous units can go
     summary.status = 'ok'
+    summary.weakArtifacts = receipts.filter((r) => r.kind === 'artifact' && r.weak).map((r) => ({ dependency: r.dependency, name: r.name, version: r.version, url: r.url, sha256: r.sha256, weak: r.weak, carriedForward: r.carriedForward || undefined }))
     summary.selectors = selectorsPath(runtimeRoot)
     out('selectors written: ' + selectorsPath(runtimeRoot))
     out('env script       : ' + envShPath(runtimeRoot))

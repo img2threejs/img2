@@ -10,6 +10,7 @@ import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { ui } from './ui.mjs'
 import { CATALOG_URL, getCatalog } from './catalog.mjs'
+import { isDirty, runGit } from './gitsafe.mjs'
 import { coreDir, coreState, ensureCoreCheckout, routePathOf } from './core.mjs'
 import { Refusal as ProvisionRefusal } from './runtime/errors.mjs'
 import { loadLocks } from './runtime/lock.mjs'
@@ -116,17 +117,22 @@ export function harnessVersion() {
 
 // ---------------------------------------------------------------- git
 
+// Every Git call goes through gitsafe.mjs: checkouts are untrusted, so repository/user/system config cannot run programs.
 function git(args, cwd) {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    }).trim()
+    return runGit(args, cwd)
   } catch (err) {
-    if (err.code === 'ENOENT') throw new CliError(EXIT.FAIL, 'git is not on PATH; install git first')
-    throw new CliError(EXIT.FAIL, 'git ' + args.join(' ') + ' failed', String(err.stderr || '').trim())
+    if (err.notFound) throw new CliError(EXIT.FAIL, 'git is not on PATH; install git first')
+    throw new CliError(EXIT.FAIL, 'git ' + args.join(' ') + ' failed', err.stderr)
+  }
+}
+
+function gitIsDirty(dir) {
+  try {
+    return isDirty(dir)
+  } catch (err) {
+    if (err.notFound) throw new CliError(EXIT.FAIL, 'git is not on PATH; install git first')
+    throw new CliError(EXIT.FAIL, 'git status check failed in ' + dir, err.stderr)
   }
 }
 
@@ -1307,7 +1313,7 @@ function advanceHarness(H, target, check = false) {
     origin = git(['config', '--get', 'remote.origin.url'], hd)
   } catch { /* no origin: treated as local below */ }
   if (origin.replace(/\.git$/, '') !== HARNESS_REPO_URL) return skip('local origin')
-  if (git(['status', '--porcelain'], hd)) return skip('dirty')
+  if (gitIsDirty(hd)) return skip('dirty')
   try {
     git(['fetch', '--quiet', '--tags', 'origin'], hd)
   } catch (err) {
@@ -1654,7 +1660,7 @@ async function cmdSetup(opts, args) {
       if (!isGitRepo(dir) || normalize(git(['remote', 'get-url', 'origin'], dir)) !== normalize(pin.repo)) {
         throw new CliError(EXIT.REFUSED, 'setup requires a managed official Git checkout for ' + pin.id)
       }
-      if (git(['status', '--porcelain'], dir)) throw new CliError(EXIT.REFUSED, 'setup will not overwrite dirty checkout ' + dir, 'preserve your changes before rerunning setup')
+      if (gitIsDirty(dir)) throw new CliError(EXIT.REFUSED, 'setup will not overwrite dirty checkout ' + dir, 'preserve your changes before rerunning setup')
       const actual = git(['rev-parse', 'HEAD'], dir)
       return { action: actual === pin.commit && row.resolvedSha === actual ? 'keep' : 'replace', ref: actual }
     },
@@ -1692,19 +1698,26 @@ async function cmdSetup(opts, args) {
 // scripts/e2e/route_one.py in the core reads <home>/provision.json: the pins HarnessPin verifies plus the jev dir.
 // Written only after setup proved every step; contains no secret, only paths and public hashes.
 export function writeProvisionRecord(H, { python, lockDigest }) {
-  const hd = harnessDir(H)
-  const launcher = path.join(hd, 'bin', 'img2.mjs')
-  const node = fs.realpathSync(process.execPath)
+  // Every path is recorded realpath-resolved (/tmp -> /private/tmp on macOS): the core's HarnessPin compares
+  // root.resolve() with the recorded root and refuses anything else with harness-pin-required.
+  const real = (p) => fs.realpathSync(p)
+  // the interpreter keeps its own file name (a venv-style link must not resolve to its base), only its directory is canonical
+  const realDir = (p) => { try { return path.join(fs.realpathSync(path.dirname(p)), path.basename(p)) } catch { return p } }
+  const home = real(H)
+  const hd = real(harnessDir(H))
+  const launcher = real(path.join(hd, 'bin', 'img2.mjs'))
+  const node = real(process.execPath)
+  const core = real(coreDir(H))
   const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
   const plugins = {}
   for (const row of readRegistry(H).plugins) {
-    plugins[row.id] = { sha: row.resolvedSha, resolvedSha: row.resolvedSha, installedDir: cloneDir(H, row.id) }
+    plugins[row.id] = { sha: row.resolvedSha, resolvedSha: row.resolvedSha, installedDir: real(cloneDir(H, row.id)) }
   }
   const record = {
     kind: 'img2.setup-provision', version: 1, status: 'ok', writtenAt: new Date().toISOString(),
-    img2Home: H, lockDigest,
-    python: python ?? null,
-    core: { dir: coreDir(H), route: routePathOf(H), commit: git(['rev-parse', 'HEAD'], coreDir(H)) },
+    img2Home: home, lockDigest,
+    python: python ? { ...python, path: python.path ? realDir(python.path) : python.path } : null,
+    core: { dir: core, route: real(routePathOf(H)), commit: git(['rev-parse', 'HEAD'], core) },
     pins: {
       harnessSha: git(['rev-parse', 'HEAD'], hd), harnessRoot: hd,
       harnessExecutable: launcher, harnessExecutableSha256: sha256(launcher),

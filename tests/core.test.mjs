@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { validateCorePin, validatePluginsLock } from '../bin/runtime/locks.mjs'
-import { ROOT, gitIn, makeCoreSource, copyCli, coreInsteadOf } from './core-fixture.mjs'
+import { ROOT, CORE_REPO, gitIn, makeCoreSource, copyCli, coreInsteadOf } from './core-fixture.mjs'
 
 const read = name => JSON.parse(fs.readFileSync(path.join(ROOT, name), 'utf8'))
 
@@ -164,4 +164,75 @@ test('the router-input record carries exactly what the core route_one.py loader 
   assert.deepEqual(record.core, { dir: path.join(sb.H, 'core'), route: path.join(sb.H, 'core/forge/route.py'), commit: sb.shas[0] })
   assert.deepEqual(record.python, { path: '/py/python3', version: '3.11.9', managed: true })
   assert.deepEqual(record.pins.plugins, {})
+})
+
+// A malicious pre-existing checkout carries its own .git/config. core.fsmonitor (and friends) make `git status` run a program.
+const plant = (core, marker) => {
+  const hook = path.join(path.dirname(core), 'fsmonitor-hook.sh')
+  fs.writeFileSync(hook, '#!/bin/sh\necho ran >> ' + JSON.stringify(marker) + '\n', { mode: 0o755 })
+  fs.appendFileSync(path.join(core, '.git/config'), '[core]\n\tfsmonitor = ' + hook + '\n')
+}
+
+test('a checkout whose .git/config sets core.fsmonitor is refused and the program never runs', t => {
+  const sb = sandbox(t)
+  assert.equal(sb.run(['install', '--from', ROOT, '--yes']).status, 0)
+  const core = path.join(sb.H, 'core'), marker = path.join(sb.root, 'fsmonitor-ran')
+  plant(core, marker)
+  const r = sb.run(['install', '--from', ROOT, '--yes'])
+  assert.equal(r.status, 2, r.stdout + r.stderr)
+  assert.match(r.stderr + r.stdout, /Git configuration that runs programs \(core\.fsmonitor\)/)
+  assert.equal(fs.existsSync(marker), false, 'the fsmonitor program ran')
+})
+
+test('cleanliness and tree checks never start a program named in the repository config', async t => {
+  const sb = sandbox(t)
+  assert.equal(sb.run(['install', '--from', ROOT, '--yes']).status, 0)
+  const core = path.join(sb.H, 'core'), marker = path.join(sb.root, 'fsmonitor-ran')
+  plant(core, marker)
+  const { isDirty, executableLocalConfig } = await import('../bin/gitsafe.mjs')
+  assert.deepEqual(executableLocalConfig(core), ['core.fsmonitor'])
+  assert.equal(isDirty(core), false)
+  fs.writeFileSync(path.join(core, 'forge/route.py'), '# edited\n')
+  assert.equal(isDirty(core), true)
+  fs.writeFileSync(path.join(core, 'forge/route.py'), '# router v0\n')
+  fs.writeFileSync(path.join(core, 'untracked.txt'), 'x')
+  assert.equal(isDirty(core), true, 'untracked files count as dirty')
+  assert.equal(fs.existsSync(marker), false, 'a Git call ran the fsmonitor program')
+})
+
+test('the checkout is verified against the pinned commit tree, not only HEAD', async t => {
+  const sb = sandbox(t)
+  assert.equal(sb.run(['install', '--from', ROOT, '--yes']).status, 0)
+  const core = path.join(sb.H, 'core')
+  const { ensureCoreCheckout } = await import('../bin/core.mjs')
+  const pin = { repo: CORE_REPO, commit: sb.shas[0], branch: 'main' }
+  const tree = gitIn(core, ['rev-parse', 'HEAD^{tree}'], sb.env)
+  assert.equal(ensureCoreCheckout(sb.H, pin, { offline: true }).head, sb.shas[0])
+  assert.match(tree, /^[0-9a-f]{40}$/)
+  // same HEAD, different content in the working tree: dirty, refused
+  fs.writeFileSync(path.join(core, 'forge/route.py'), '# tampered\n')
+  assert.throws(() => ensureCoreCheckout(sb.H, pin, { offline: true }), /dirty core checkout/)
+})
+
+test('the provision record holds realpath-resolved paths even when the home is reached through a symlink', async t => {
+  const sb = sandbox(t)
+  assert.equal(sb.run(['install', '--from', ROOT, '--yes']).status, 0)
+  const alias = path.join(sb.root, 'alias') // stands for /tmp -> /private/tmp
+  fs.symlinkSync(sb.home, alias)
+  const viaAlias = path.join(alias, '.img2')
+  fs.mkdirSync(path.join(sb.H, 'runtime/py'), { recursive: true })
+  assert.notEqual(viaAlias, fs.realpathSync(viaAlias))
+  const { writeProvisionRecord } = await import('../bin/img2.mjs')
+  const file = writeProvisionRecord(viaAlias, { python: { path: path.join(viaAlias, 'runtime/py/python3'), version: '3.11.9', managed: true }, lockDigest: 'd'.repeat(64) })
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const real = fs.realpathSync(sb.H)
+  assert.equal(record.img2Home, real)
+  assert.equal(record.pins.harnessRoot, path.join(real, 'harness'))
+  assert.equal(record.pins.harnessExecutable, path.join(real, 'harness/bin/img2.mjs'))
+  assert.equal(record.core.dir, path.join(real, 'core'))
+  assert.equal(record.core.route, path.join(real, 'core/forge/route.py'))
+  assert.equal(record.python.path, path.join(real, 'runtime/py/python3'))
+  for (const p of [record.img2Home, record.pins.harnessRoot, record.pins.harnessExecutable, record.pins.node, record.core.dir, record.core.route]) {
+    assert.equal(fs.realpathSync(p), p, p + ' is canonical')
+  }
 })

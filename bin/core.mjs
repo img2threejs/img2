@@ -1,21 +1,20 @@
 // The img2threejs core skill (forge/route.py, preflight, state): pinned in plugins.lock.json under `core`,
 // checked out at $IMG2_HOME/core at exactly that commit. Git only; host linking stays in img2.mjs.
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Refusal } from './runtime/errors.mjs'
+import { executableLocalConfig, isDirty, runGit } from './gitsafe.mjs'
 
 export const coreDir = (H) => path.join(H, 'core')
 export const routePathOf = (H) => path.join(coreDir(H), 'forge', 'route.py')
 
+// Hardened Git (see gitsafe.mjs): neither the checkout's own config nor the user's can make it run a program.
 const git = (args, cwd) => {
   try {
-    return execFileSync('git', args, {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    }).trim()
+    return runGit(args, cwd)
   } catch (err) {
-    if (err.code === 'ENOENT') throw new Refusal('git is not on PATH; install git first')
-    throw new Refusal('git ' + args.join(' ') + ' failed', String(err.stderr || '').trim(), 1)
+    if (err.notFound) throw new Refusal('git is not on PATH; install git first')
+    throw new Refusal('git ' + args.join(' ') + ' failed', err.stderr, 1)
   }
 }
 
@@ -34,7 +33,9 @@ export function coreState(H, pin) {
     origin = git(['config', '--get', 'remote.origin.url'], dir) // raw: get-url would apply insteadOf rewrites
   } catch { throw new Refusal(dir + ' exists but is not a Git checkout of the core', 'move it aside; setup will not overwrite it') }
   if (normalize(origin) !== normalize(pin.repo)) throw new Refusal(dir + ' has origin ' + origin + ', not ' + pin.repo, 'move it aside; setup will not overwrite it')
-  if (git(['status', '--porcelain'], dir)) throw new Refusal('setup will not overwrite dirty core checkout ' + dir, 'preserve your changes before rerunning setup')
+  const executable = executableLocalConfig(dir)
+  if (executable.length) throw new Refusal(dir + ' has Git configuration that runs programs (' + executable.join(', ') + ')', 'move it aside; setup will not verify or overwrite it')
+  if (isDirty(dir)) throw new Refusal('setup will not overwrite dirty core checkout ' + dir, 'preserve your changes before rerunning setup')
   return { state: head === pin.commit ? 'at-pin' : 'behind', head }
 }
 
@@ -46,9 +47,20 @@ function fetchPinned(dir, pin) {
   }
 }
 
+// The tree the pinned commit object declares, read from the object itself (replace refs are off).
+const treeOfCommit = (dir, commit) => {
+  const m = /^tree ([0-9a-f]{40}|[0-9a-f]{64})$/m.exec(git(['cat-file', 'commit', commit], dir))
+  if (!m) throw new Refusal('pinned core commit ' + commit + ' has no readable tree')
+  return m[1]
+}
+
 function verified(dir, pin) {
   const head = git(['rev-parse', 'HEAD'], dir)
   if (head !== pin.commit) throw new Refusal('core checkout is at ' + head + ', not the pinned ' + pin.commit)
+  const tree = git(['rev-parse', 'HEAD^{tree}'], dir)
+  const wanted = treeOfCommit(dir, pin.commit)
+  if (tree !== wanted) throw new Refusal('core checkout tree ' + tree + ' does not match the pinned commit tree ' + wanted)
+  if (isDirty(dir)) throw new Refusal('core checkout differs from the pinned tree ' + wanted, 'move it aside; setup will not overwrite it')
   if (!fs.existsSync(path.join(dir, 'forge', 'route.py'))) throw new Refusal('core checkout at ' + pin.commit + ' has no forge/route.py')
   return head
 }

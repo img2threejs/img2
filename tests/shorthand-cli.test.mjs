@@ -77,7 +77,7 @@ function sandbox(t) {
     marker: path.join(root, 'catalog-called'), preload: path.join(root, 'preload.mjs'),
     env: { HOME, PATH: path.join(HOME, '.local/bin') + path.delimiter + process.env.PATH,
       IMG2_HOME: path.join(HOME, '.img2'), XDG_CONFIG_HOME: path.join(HOME, '.config'),
-      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', NO_COLOR: '1' },
+      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.file://' + origins + '/.insteadOf', GIT_CONFIG_VALUE_0: 'https://github.com/img2threejs/', GIT_TERMINAL_PROMPT: '0', NO_COLOR: '1' },
   }
   sb.env.NODE_OPTIONS = '--import=' + sb.preload
   preload(sb)
