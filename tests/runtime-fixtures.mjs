@@ -213,7 +213,7 @@ export function stubRunner({ failOn = [], failProbe = [], webgl = true } = {}) {
       let installed = {}
       try { installed = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(file)), 'installed.json'), 'utf8')) } catch { /* not a venv */ }
       if (code.includes('torchOutputShape') || code.includes('import torch')) return json({ ...installed, torchOutputShape: [1, 2] })
-      if (code.includes('import bpy')) return json({ version: installed.bpy, versionString: installed.bpy + ' LTS', module: '/x/bpy', glbMagic: 'glTF', glbBytes: 2048 })
+      if (code.includes('import bpy')) return json({ version: installed.bpy, versionString: installed.bpy + ' LTS', module: '/x/bpy', cube: { verts: 8, faces: 6 }, glbMagic: 'glTF', glbBytes: 2048 })
       if (code.includes('numpy as np')) return json({ version: installed.numpy, product: [[5, 14], [14, 50]] })
       if (code.includes('PIL')) return json({ version: installed.pillow, size: [2, 2], pixel: [10, 20, 30] })
       if (code.includes('sync_playwright')) return json({ version: installed.playwright, chromium: '156' })

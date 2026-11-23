@@ -37,9 +37,12 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 - Provisioning retains previous units until the complete run succeeds and restores them after later
   failures. Interrupted runs restore parked previous units before resuming.
-- Keep `pip check` failures fatal, including the upstream macOS arm64 bpy 4.5.15 wheel's inconsistent
-  `cp39` metadata tags despite its `cp311` filename; that artifact requires corrected upstream bytes
-  and lock integrity pins rather than a provisioner platform-check waiver.
+- `pip check` stays fatal except one audited waiver: `bpy <version> is not supported on this platform` for a
+  wheel whose sha256 equals the lock pin, whose filename tag matches the platform and whose internal `WHEEL`
+  tag differs only in the python tag (PyPI's bpy cp311 macOS wheels carry `Tag: cp39-...`). Any other line,
+  package, hash or tag difference fails. The waiver (`upstream-wheel-tag-mismatch`, package, version, wheel
+  sha256) is recorded in `provision.json`; the bpy probes now also create and evaluate a cube headlessly.
+- The Vite probe uses the real path of its scratch directory (macOS `/tmp` is a symlink and Rollup rejected it).
 - Vision probes check actual pinned distributions in closure-only lock entries rather than treating
   the entry's descriptive name as an installed package.
 - Refuse hardlink sources with symlinked ancestors and revalidate sources after extraction; recheck

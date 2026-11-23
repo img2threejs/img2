@@ -93,16 +93,18 @@ function makeCtx({ deps, rtDir, cacheDir, platform, lock, offline, allowWeak, re
         throw e
       }
     },
-    async exec(unit, what, file, args, { cwd, env, timeout } = {}) {
+    // tolerateFailure: a non-zero exit is returned ({ ok: false, ... }) instead of thrown, for callers that judge it.
+    async exec(unit, what, file, args, { cwd, env, timeout, tolerateFailure = false } = {}) {
       const started = Date.now()
       const r = await deps.run(file, args, { cwd, env: cleanEnv({ TMPDIR: tmpDir, ...(env ?? {}) }), timeout })
       const ok = r.code === 0 && !r.error && !r.timedOut
       ctx.record({ kind: 'exec', unit, step: what, command: [file, ...args].join(' ').slice(0, 400), exitCode: r.code, timedOut: r.timedOut || undefined, ok, ms: Date.now() - started })
+      if (!ok && tolerateFailure) return { ...r, ok }
       if (!ok) {
         throw new StepError(what + ' failed' + (r.timedOut ? ' (timeout)' : ' (exit ' + r.code + ')') + ' in ' + unit,
           [r.error, r.stderr.trim().slice(-1500), r.stdout.trim().slice(-500)].filter(Boolean).join('\n'), { exitCode: r.code })
       }
-      return r
+      return { ...r, ok }
     },
   }
   return ctx
@@ -302,7 +304,8 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
       rmrf(stage)
       ensureDir(stage)
       try {
-        const { exports } = await buildUnit(ctx, unit, stage, cliDep)
+        const { exports, waivers } = await buildUnit(ctx, unit, stage, cliDep)
+        if (waivers.length) row.waivers = waivers
         const checks = await runProbes(pctxFor(ctx, stage, selection), unit.deps)
         row.probes = checks
         const bad = failedChecks(checks)

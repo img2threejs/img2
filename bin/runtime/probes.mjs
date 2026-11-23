@@ -12,7 +12,7 @@ export const nodeRootOf = (unitDir) => path.join(unitDir, 'node')
 export const browsersOf = (unitDir) => path.join(unitDir, 'browsers')
 export const cliRootOf = (unitDir) => path.join(unitDir, 'cli')
 
-const tail = (s, n = 1500) => String(s ?? '').trim().slice(-n)
+const tail = (s, n = 8000) => String(s ?? '').trim().slice(-n)
 
 // Numeric bpy version: bpy.app.version_string is "4.5.15 LTS" for the LTS build.
 export const numericVersion = (s) => (/\d+(?:\.\d+)*/.exec(String(s)) ?? [''])[0]
@@ -81,6 +81,12 @@ const BPY = async (pctx, deps) => {
       'res = {"version": ".".join(str(n) for n in bpy.app.version), "versionString": bpy.app.version_string, "module": bpy.__file__}',
       'try:',
       '    bpy.ops.wm.read_factory_settings(use_empty=True)',
+      '    bpy.ops.mesh.primitive_cube_add(size=2.0)',
+      '    cube = bpy.context.active_object',
+      '    ev = cube.evaluated_get(bpy.context.evaluated_depsgraph_get())',
+      '    em = ev.to_mesh()',
+      '    res["cube"] = {"verts": len(em.vertices), "faces": len(em.polygons)}',
+      '    ev.to_mesh_clear()',
       '    mesh = bpy.data.meshes.new("img2probe")',
       '    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])',
       '    mesh.update()',
@@ -104,6 +110,11 @@ const BPY = async (pctx, deps) => {
       path: venvPython(pctx.unitDir), stderr: t.stderr, remedy: 'img2 provision (bpy needs the exact CPython ABI in the lock)',
     }))
     if (!t.problem) {
+      // pip's own platform-tag check is waived for the mis-tagged upstream wheels (see pipcheck.mjs); this is the real proof.
+      const cubeOk = t.json.cube?.verts === 8 && t.json.cube?.faces === 6
+      out.push(check('bpy-cube-eval', d.id, cubeOk, 'a cube created and evaluated headlessly (8 vertices, 6 faces)', cubeOk ? '8 vertices, 6 faces' : (t.json.exportError ?? JSON.stringify(t.json.cube ?? null)), {
+        path: venvPython(pctx.unitDir), stderr: t.stderr, remedy: 'img2 provision --remove then img2 provision',
+      }))
       const exported = t.json.glbMagic === 'glTF' && t.json.glbBytes > 20
       out.push(check('bpy-export', d.id, exported, 'mesh created and exported as GLB (glTF magic)', exported ? t.json.glbBytes + ' bytes' : (t.json.exportError ?? 'no GLB written'), {
         path: venvPython(pctx.unitDir), stderr: t.stderr, remedy: 'rerun img2 doctor --runtime; if it persists, reinstall with img2 provision --remove then img2 provision',
@@ -209,10 +220,12 @@ const VITE_BUILD = async (pctx, deps) => {
   try {
     atomicWriteFile(path.join(dir, 'index.html'), '<!doctype html><script type="module" src="./main.js"></script>', 0o644)
     atomicWriteFile(path.join(dir, 'main.js'), (hasThree ? 'import * as THREE from "three"\nwindow.r = THREE.REVISION\n' : 'window.r = 1\n'), 0o644)
-    const out = path.join(dir, 'dist')
+    // vite/rollup resolve symlinks (macOS /tmp -> /private/tmp); a symlinked root makes html asset names relative-escaping
+    const realDir = fs.realpathSync(dir)
+    const out = path.join(realDir, 'dist')
     const t = await nodeRun(pctx, root, [
       'const { build, version } = await import("vite")',
-      'await build({ root: ' + JSON.stringify(dir) + ', logLevel: "silent", configFile: false, build: { outDir: ' + JSON.stringify(out) + ', emptyOutDir: true } })',
+      'await build({ root: ' + JSON.stringify(realDir) + ', logLevel: "silent", configFile: false, build: { outDir: ' + JSON.stringify(out) + ', emptyOutDir: true } })',
       'const fs = await import("node:fs")',
       'const files = fs.readdirSync(' + JSON.stringify(path.join(out, 'assets')) + ')',
       'console.log(JSON.stringify({ vite: version, assets: files }))',

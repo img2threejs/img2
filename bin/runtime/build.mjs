@@ -8,6 +8,7 @@ import { extractTarGz, extractZip } from './extract.mjs'
 import { atomicWriteFile, ensureDir, isUnder, rmrf, treeDigest } from './fsx.mjs'
 import { artifactsOf, integrityOf } from './lock.mjs'
 import { installNpmRoot } from './npmroot.mjs'
+import { evaluatePipCheck } from './pipcheck.mjs'
 import { threeInventoryDigest } from './selectors.mjs'
 import { browsersOf, cliRootOf, nodeRootOf, venvPython } from './probes.mjs'
 
@@ -108,9 +109,27 @@ async function buildVenv(ctx, unit, stage, pipDeps) {
   const venvPy = venvPython(stage)
   await ctx.exec(unit.name, 'pip install --require-hashes', venvPy, ['-I', '-m', 'pip', '--isolated', 'install', '--no-input', '--no-index', '--find-links', wheels,
     '--require-hashes', '--only-binary=:all:', '--no-deps', '-r', reqFile], { timeout: 1_800_000 })
-  await ctx.exec(unit.name, 'pip check', venvPy, ['-I', '-m', 'pip', '--isolated', 'check'], { timeout: 120_000 })
+  const waivers = []
+  const check = await ctx.exec(unit.name, 'pip check', venvPy, ['-I', '-m', 'pip', '--isolated', 'check'], { timeout: 120_000, tolerateFailure: true })
+  if (!check.ok) {
+    const output = [check.stdout, check.stderr].filter(Boolean).join('\n')
+    // Only a failed (not killed, not unstartable) pip check is ever examined for the waiver.
+    const candidates = check.error || check.timedOut || check.code === null ? [] : fetched.map((f) => {
+      const integ = integrityOf(f.artifact)
+      const filename = f.artifact.filename ?? path.basename(new URL(f.artifact.url).pathname)
+      return { name: f.name, version: f.version, filename, file: path.join(wheels, filename), lockSha256: integ.algo === 'sha256' ? integ.hex : null }
+    })
+    const verdict = evaluatePipCheck({ output, candidates, platform: ctx.platform })
+    if (check.error || check.timedOut || check.code === null || verdict.fatal.length) {
+      throw new StepError('pip check failed (exit ' + check.code + ') in ' + unit.name, [check.error, output.trim().slice(-1500), ...verdict.fatal].filter(Boolean).join('\n'), { exitCode: check.code })
+    }
+    for (const w of verdict.waivers) {
+      waivers.push(w)
+      ctx.record({ kind: 'waiver', unit: unit.name, ...w })
+    }
+  }
   rmrf(wheels)
-  return { python: py, installed: req.map((l) => l.split(' ')[0]) }
+  return { python: py, installed: req.map((l) => l.split(' ')[0]), waivers }
 }
 
 // ---------------------------------------------------------------- npm roots
@@ -250,6 +269,7 @@ async function placeModels(ctx, unit, stage, modelDeps) {
 // Returns { exports } where export paths are relative to the unit directory.
 export async function buildUnit(ctx, unit, stage, cliDep) {
   const exportsOut = {}
+  const waivers = []
   const deps = unit.deps
   const single = deps[0]
   if (unit.name === 'runtime/python-runtime') {
@@ -274,7 +294,7 @@ export async function buildUnit(ctx, unit, stage, cliDep) {
     const pipDeps = deps.filter((d) => d.entry.kind === 'pip')
     const npmDeps = deps.filter((d) => d.entry.kind === 'npm')
     const modelDeps = deps.filter((d) => d.entry.kind === 'model')
-    if (pipDeps.length) await buildVenv(ctx, unit, stage, pipDeps)
+    if (pipDeps.length) waivers.push(...(await buildVenv(ctx, unit, stage, pipDeps)).waivers)
     if (npmDeps.length) await buildNpm(ctx, unit, nodeRootOf(stage), npmDeps, 'node')
     if (modelDeps.length) await placeModels(ctx, unit, stage, modelDeps)
     if (pipDeps.length && unit.environment === 'character') exportsOut.IMG2_CHARACTER_BPY_PYTHON = path.relative(stage, venvPython(stage))
@@ -288,5 +308,5 @@ export async function buildUnit(ctx, unit, stage, cliDep) {
       }
     }
   }
-  return { exports: exportsOut }
+  return { exports: exportsOut, waivers }
 }
