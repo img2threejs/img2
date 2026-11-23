@@ -87,6 +87,12 @@ export async function resolveToolPython({ selection, locked, home, runtimeDeps }
 const quote = value => /^[a-zA-Z0-9_./:@=-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'"
 const loginCommand = (home, python) => 'IMG2_HOME=' + quote(home) + ' ' + quote(python) + ' ' + quote(path.join(home, 'plugins/jev/tools/jev.py')) + ' login'
 
+// The one supported router invocation (bin/route.mjs): it picks the interpreter, PATH, canonical IMG2_HOME and the
+// harness pins itself, so nothing about the managed Python is left for the user to arrange.
+const canonical = p => { try { return fs.realpathSync(p) } catch { return p } }
+export const routeCommand = home => 'node ' + quote(path.join(canonical(home), 'harness', 'bin', 'img2.mjs')) + ' --home ' + quote(canonical(home))
+  + ' route --workspace WORKSPACE --run-id RUN_ID --image IMAGE [--objects OBJECTS.json] [--intent INTENT] [--expected-output 2d|3d]'
+
 // Auth is delegated entirely to Jev. Never print its raw stdout/stderr or read a credential ourselves.
 async function checkJevAuth(home, runtimeDeps, python) {
   let result
@@ -225,7 +231,6 @@ export async function runSetup(opts, home, deps) {
       const file = deps.writeProvisionRecord({ python: { path: python.path, version: python.version, managed: python.managed }, lockDigest: locked.lockDigest })
       out('Router inputs recorded: ' + file)
     }
-    if (deps.core) out('Core router: ' + quote(python.path) + ' ' + quote(path.join(home, 'core', 'forge', 'route.py')) + ' (img2 core-path prints the route.py path)')
     for (const row of rows) row.next = 'Restart your agent; follow the plugin instructions'
     if (selected.includes('jev')) {
       stage = 'Jev auth-status'
@@ -234,14 +239,16 @@ export async function runSetup(opts, home, deps) {
       const status = await checkJevAuth(home, runtimeDeps, python.path)
       if (status === 'missing') {
         jev.next = loginCommand(home, python.path)
+        summary()
         out('Jev credential missing. Run this exact login command in your own terminal (TTY required; setup never handles the key):')
         out(jev.next)
-        summary()
+        if (deps.core) { out('Then route an image (img2 route sets the interpreter, PATH, IMG2_HOME and harness pins; consent is still yours to grant):'); out(routeCommand(home)) }
         return 3
       }
       jev.next = 'Review workspace image-disclosure and paid-call consent before routing'
     }
     summary()
+    if (deps.core) { out('Route an image with the core router (img2 route sets the interpreter, PATH, IMG2_HOME and harness pins; consent is still yours to grant):'); out(routeCommand(home)) }
     out('Setup complete. Re-run img2 setup with the same selection to verify and repair.')
     return 0
   } catch (error) {

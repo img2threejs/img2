@@ -95,7 +95,30 @@ source), `--strict-hash`, `--skip` and `--offline` (`--allow-weak-hash` is still
    login command as the next step when no credential is present.
 
 After step 6 setup writes `$IMG2_HOME/provision.json` (harness commit and launcher SHA-256, node, the
-installed plugin dirs, core path, interpreter) and prints the router command. That file is what the
+installed plugin dirs, core path, interpreter) and prints the `img2 route` command (plus the Jev login
+command while no credential is enrolled).
+
+#### Running the core: `img2 route` / `img2 core-run`
+
+`img2 route <route.py args>` is the one supported way to run the pinned core router from an install;
+`img2 core-run <script under core/forge> <args>` runs any other core script (e.g. `preflight.py`) the same
+way, without adding pins. Both read `provision.json`, refuse with the remedy when it is missing, stale or
+its launcher hash differs, and then:
+
+- resolve `IMG2_HOME` with `realpath` and export `IMG2_HOME` and `IMG2_HARNESS_DIR`;
+- start the core with a minimal environment (identity, locale, TLS/proxy settings and `TYPESAFE_API_KEY`
+  only; never `PYTHONPATH`, pip/npm settings or `NODE_OPTIONS`); `PATH` is the managed Python dir, the
+  pinned Node dir, the dir of the `blender` already on your `PATH`, your other absolute `PATH` entries,
+  then the system dirs;
+- run the core under `runtime/<digest>/route-python`: a copy of the managed CPython whose only extra import
+  path is the site-packages of the provisioned env whose Pillow passed its runtime probe (`jev`, then
+  `pixi2d`, ...). The core's Jev image preparation resolves its interpreter and runs it with `-I`, so
+  neither a venv symlink nor `PYTHONPATH` can supply Pillow;
+- for `route`, add `--harness-root/--harness-sha/--harness-executable/--harness-sha256` from
+  `provision.json` unless you passed them.
+
+It never grants consent or logs in. One summary line (paths, Pillow version, blender) goes to stderr;
+stdout is the router's. That file is what the
 core's `scripts/e2e/route_one.py --home "$IMG2_HOME"` reads, so a clean home can route without
 hand-built inputs; the core's own pin check (`forge/route.py`) also requires the launcher's import
 closure to stay static (see `tests/launcher-closure.test.mjs`).

@@ -25,6 +25,12 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Added
 
+- `img2 route <route.py args>` and `img2 core-run <script> <args>`: the one supported way to run the core from
+  an install (`bin/route.mjs`). Canonical `IMG2_HOME`, a minimal environment, the managed Python (and the
+  user's `blender`) first on `PATH`, a copied route interpreter that sees only the verified Pillow env, and
+  the harness pins from `provision.json`. Fixes acceptance round-2 N1 (no Pillow under the managed Python),
+  N2 (probes need the managed Python first on `PATH`) and N3 (non-canonical `IMG2_HOME`). Setup prints the
+  `img2 route` command and, while no credential is enrolled, the Jev login command.
 - The core skill is pinned in `plugins.lock.json` (`core`, validated by `validateCorePin`), checked out by
   `img2 install` (skip with `--no-core`) and `img2 setup` at `$IMG2_HOME/core`, linked into hosts as
   `img2threejs`, and verified by `img2 doctor`. `img2 core-path [--json]` prints where `forge/route.py` is.

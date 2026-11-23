@@ -499,6 +499,9 @@ test('missing Jev auth prints the exact shell-safe login command and returns 3',
   assert.ok(Number.isFinite(call.opts.timeout) && call.opts.timeout > 0 && call.opts.timeout <= 300_000, 'bounded timeout')
   assert.ok(h.out.some((l) => l.includes(`IMG2_HOME=${sq(home)} ${sq(managedPython(h.fx, home))} ${sq(script)} login`)), h.text())
   assert.deepEqual(h.log.slice(-4), ['doctor', 'doctorRuntime', 'record', 'auth'])
+  const route = h.out.findIndex((l) => l.startsWith('node ' + path.join(home, 'harness/bin/img2.mjs') + ' --home ' + home + ' route '))
+  const login = h.out.findIndex((l) => l.includes(' login'))
+  assert.ok(login >= 0 && route > login, 'the login command, then the img2 route command: ' + h.text())
 })
 
 test('the login command quotes spaces and apostrophes with POSIX escaping and only when needed', async () => {
@@ -734,7 +737,8 @@ test('setup records the router inputs after the runtime doctor and names the rou
   assert.deepEqual(h.records[0].python, { path: managedPython(h.fx, home), version: '3.11.18', managed: true })
   assert.equal(h.records[0].lockDigest, loadLocks(h.fx.root).lockDigest)
   assert.ok(h.log.indexOf('record') > h.log.indexOf('doctorRuntime'))
-  assert.ok(h.out.some((l) => l === 'Core router: ' + managedPython(h.fx, home) + ' ' + path.join(home, 'core/forge/route.py') + ' (img2 core-path prints the route.py path)'), h.text())
+  assert.ok(h.out.some((l) => l === 'node ' + path.join(home, 'harness/bin/img2.mjs') + ' --home ' + home + ' route --workspace WORKSPACE --run-id RUN_ID --image IMAGE [--objects OBJECTS.json] [--intent INTENT] [--expected-output 2d|3d]'), h.text())
+  assert.ok(!h.out.some((l) => l.includes('Core router:')), 'the bare router path is no longer advertised: it cannot run without the interpreter, PATH and pins')
   const failing = harness({ codes: { doctorRuntime: 1 } })
   assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), homeOf(), failing.deps), 1)
   assert.equal(failing.records.length, 0, 'no record when the runtime did not verify')

@@ -17,6 +17,7 @@ import { loadLocks } from './runtime/lock.mjs'
 import { managedPythonPath, realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
 import { runSetup } from './setup.mjs'
+import { describeRun, prepareCoreRun, runCore } from './route.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
@@ -1762,6 +1763,19 @@ async function cmdCorePath(opts) {
   return EXIT.OK
 }
 
+// `img2 route <route.py args>` / `img2 core-run <script> <args>`: the one supported way to run the pinned core (bin/route.mjs).
+// Everything after the command name belongs to the core script, so stdout stays the router's own output.
+async function cmdCoreRun(kind, opts, args) {
+  let prepared
+  try {
+    prepared = prepareCoreRun({ kind, args, home: resolveImg2Home(opts.home) })
+  } catch (e) {
+    throw asCliError(e)
+  }
+  console.error(describeRun(prepared))
+  return runCore(prepared)
+}
+
 async function cmdDoctorRuntime(opts) {
   try {
     return await runDoctorRuntime({ home: resolveImg2Home(opts.home), json: opts.json, deps: realDeps() })
@@ -2496,6 +2510,8 @@ const HELP_COMMANDS = [
   ['img2 install [--no-core]', 'Set up the harness, the pinned core and supported agent hosts'],
   ['img2 setup [--yes | --plugins a,b | --minimal] [--strict-hash]', 'Choose plugins (default all), install the pinned core and plugins and verify the full runtime'],
   ['img2 core-path [--json]', 'Print where the pinned core router (forge/route.py) lives under $IMG2_HOME/core'],
+  ['img2 route <route.py args>', 'Run the pinned core router with the managed Python (Pillow), blender, canonical IMG2_HOME and the harness pins from provision.json'],
+  ['img2 core-run <script> [args]', 'Run another core script (e.g. preflight.py) the same way; pins are not added'],
   ['img2 plugins [--json]', 'Discover officially announced plugins'],
   ['img2 add <plugin-id>', 'Install by catalog ID: character, cs2, interior, jev, pixi2d'],
   ['img2 add <org/repo | url>', 'Install directly from a Git repository'],
@@ -2559,6 +2575,8 @@ function printHelp() {
     [EXIT.REFUSED, 'Refused'], [EXIT.NEEDS_INPUT, 'Interactive input required'],
   ])
 }
+
+const CORE_RUN_COMMANDS = ['route', 'core-run']
 
 export function parseArgs(argv) {
   const opts = {
@@ -2626,8 +2644,10 @@ export function parseArgs(argv) {
     else if (a === '--to-kind') opts.toKind = take(a, argv[++i])
     else if (a === '--plugin') opts.plugin = take(a, argv[++i])
     else if (a.startsWith('-')) throw new CliError(EXIT.REFUSED, 'unknown option: ' + a, 'run --help for the flag list')
-    else if (!command) command = a
-    else args.push(a)
+    else if (!command) {
+      command = a
+      if (CORE_RUN_COMMANDS.includes(a)) { args.push(...argv.slice(i + 1)); break }
+    } else args.push(a)
   }
   return { command, opts, args }
 }
@@ -2638,6 +2658,8 @@ const COMMANDS = {
   install: (opts) => cmdInstall(opts),
   setup: (opts, args) => cmdSetup(opts, args),
   'core-path': (opts) => cmdCorePath(opts),
+  route: (opts, args) => cmdCoreRun('route', opts, args),
+  'core-run': (opts, args) => cmdCoreRun('core-run', opts, args),
   add: (opts, args) => cmdAdd(opts, args[0]),
   remove: (opts, args) => cmdRemove(opts, args[0]),
   list: (opts) => cmdList(opts),
@@ -2688,7 +2710,7 @@ async function main() {
   if (!handler) {
     throw new CliError(EXIT.REFUSED, 'unknown command: ' + command, 'expected ' + Object.keys(COMMANDS).join(', '))
   }
-  if (!opts.json && command !== 'capabilities' && command !== 'core-path') ui.banner()
+  if (!opts.json && command !== 'capabilities' && command !== 'core-path' && !CORE_RUN_COMMANDS.includes(command)) ui.banner()
   return handler(opts, args)
 }
 
