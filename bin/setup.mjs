@@ -1,11 +1,12 @@
 // One selection, then the existing installation and runtime building blocks, in order.
+import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { ui } from './ui.mjs'
 import { Refusal } from './runtime/errors.mjs'
-import { loadLocks, resolveSelection, detectPlatform, assertSupported } from './runtime/lock.mjs'
+import { loadLocks, resolveSelection, detectPlatform, assertSupported, weakArtifacts } from './runtime/lock.mjs'
 import { buildUnits } from './runtime/plan.mjs'
-import { realDeps, runProvision } from './runtime/provision.mjs'
+import { managedPythonPath, realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
 import { cleanEnv } from './runtime/exec.mjs'
 
@@ -49,14 +50,48 @@ export async function selectSetupPlugins(opts, { isTTY = !!process.stdin.isTTY, 
   return parseSetupSelection(await ask('Install plugins (Enter = all; or comma-separated names): '))
 }
 
+// Plugin tools (Jev auth-status, its login hint) use annotations such as `float | int` that need CPython >= 3.10.
+export const MIN_TOOL_PYTHON = [3, 10]
+const PY_PROBE = 'import sys; print(".".join(map(str, sys.version_info[:3])))'
+const versionOk = v => {
+  const m = /^(\d+)\.(\d+)/.exec(String(v ?? '').trim())
+  return !!m && (Number(m[1]) > MIN_TOOL_PYTHON[0] || (Number(m[1]) === MIN_TOOL_PYTHON[0] && Number(m[2]) >= MIN_TOOL_PYTHON[1]))
+}
+
+// The interpreter every plugin tool runs with. The provisioned python-runtime (3.11) when this setup builds it;
+// otherwise (python-runtime skipped or unavailable) a PATH python >= 3.10, probed now. Refuses before any
+// install or download when neither exists, so a bad PATH costs seconds, not a full provisioning.
+export async function resolveToolPython({ selection, locked, home, runtimeDeps }) {
+  const managed = selection.deps.find(d => d.id === 'python-runtime')
+  if (managed && managed.status !== 'skipped') {
+    return { path: managedPythonPath(home, locked.lockDigest), version: managed.entry.version, managed: true }
+  }
+  const dirs = String((runtimeDeps.env ?? process.env).PATH ?? '').split(path.delimiter).filter(Boolean)
+  const checked = []
+  const seen = new Set()
+  for (const name of ['python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3']) {
+    for (const dir of dirs) {
+      const file = path.join(dir, name)
+      if (seen.has(file) || !fs.existsSync(file)) continue
+      seen.add(file)
+      const r = await runtimeDeps.run(file, ['-I', '-c', PY_PROBE], { env: cleanEnv({}, runtimeDeps.env ?? process.env), timeout: 30_000 })
+      const version = String(r?.stdout ?? '').trim()
+      checked.push(file + ' = ' + (r?.code === 0 && version ? version : 'unusable'))
+      if (r?.code === 0 && versionOk(version)) return { path: file, version, managed: false }
+    }
+  }
+  throw new Refusal('setup needs a Python >= ' + MIN_TOOL_PYTHON.join('.') + ' for plugin tools and found none',
+    'the managed python-runtime is not part of this selection and no suitable python is on PATH.\nchecked: ' + (checked.join('; ') || 'nothing on PATH') + '\nNothing was changed.')
+}
+
 const quote = value => /^[a-zA-Z0-9_./:@=-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'"
-const loginCommand = home => 'IMG2_HOME=' + quote(home) + ' python3 ' + quote(path.join(home, 'plugins/jev/tools/jev.py')) + ' login'
+const loginCommand = (home, python) => 'IMG2_HOME=' + quote(home) + ' ' + quote(python) + ' ' + quote(path.join(home, 'plugins/jev/tools/jev.py')) + ' login'
 
 // Auth is delegated entirely to Jev. Never print its raw stdout/stderr or read a credential ourselves.
-async function checkJevAuth(home, runtimeDeps) {
+async function checkJevAuth(home, runtimeDeps, python) {
   let result
   try {
-    result = await runtimeDeps.run('python3', [path.join(home, 'plugins/jev/tools/jev.py'), 'auth-status'], {
+    result = await runtimeDeps.run(python, [path.join(home, 'plugins/jev/tools/jev.py'), 'auth-status'], {
       env: cleanEnv({ IMG2_HOME: home }, runtimeDeps.env ?? process.env), timeout: 20_000,
     })
   } catch { /* do not expose runner exceptions or credential-storage diagnostics */ }
@@ -66,7 +101,7 @@ async function checkJevAuth(home, runtimeDeps) {
     if (result.code === 0 && status.status === 'present' && status.reasonCode === 'credential-present') return 'present'
     if (result.code === 3 && status.status === 'missing' && status.reasonCode === 'credential-missing') return 'missing'
   }
-  throw new Error('Jev auth-status unavailable; run its auth-status command in a terminal to diagnose secure storage')
+  throw new Error('Jev auth-status unavailable (interpreter ' + python + '); run its auth-status command in a terminal to diagnose secure storage')
 }
 
 function runtimeCounts(id, locked, opts, runtimeDeps, checks) {
@@ -123,6 +158,21 @@ export async function runSetup(opts, home, deps) {
       }
       return pin
     })
+    if (opts.strictHash && opts.allowWeakHash) throw new Refusal('--strict-hash conflicts with --allow-weak-hash')
+    const selection = resolveSelection({ lock: locked.lock, pluginsLock: locked.plugins, profile: 'full', plugins: selected, skip: opts.skip ?? [], platform: runtimeDeps.platform ?? detectPlatform() })
+    const platform = selection.platform
+    const weak = buildUnits(selection, locked.lock).flatMap(unit => unit.deps.flatMap(d => weakArtifacts(d.entry, platform).map(w => ({ ...w, unit: unit.name }))))
+    if (weak.length && opts.strictHash) {
+      throw new Refusal('--strict-hash: ' + weak.length + ' artifact(s) have no SHA-256 in the lock',
+        weak.slice(0, 8).map(w => w.dep + ' ' + w.file + ' [' + w.kind + ']').join('\n') + '\nrerun without --strict-hash to accept them (a locally computed SHA-256 is recorded in the receipt), or --skip them. Nothing was changed.')
+    }
+    const python = await resolveToolPython({ selection, locked, home, runtimeDeps })
+    out('Plugin tools run with Python ' + python.version + ' (' + (python.managed ? 'managed python-runtime, provisioned by this setup' : 'system') + '): ' + python.path)
+    if (weak.length) {
+      out('Notice: ' + weak.length + ' artifact(s) have no SHA-256 in the lock (browsers, model configs); accepted by default, a locally computed SHA-256 is recorded in ' + path.join(home, 'runtime', 'provision.json') + '. Use --strict-hash to refuse them.')
+    }
+    const corePin = locked.plugins.core
+    const coreState = deps.corePlan ? await deps.corePlan(corePin) : null
     const installNeeded = await deps.installNeeded()
     const states = []
     for (const [i, pin] of pins.entries()) {
@@ -130,11 +180,15 @@ export async function runSetup(opts, home, deps) {
       states.push(state)
       rows[i].ref = state.ref
     }
-    if (opts.offline && ((installNeeded && !opts.from) || states.some(s => s.action !== 'keep'))) {
-      throw new Refusal('--offline requires an installed harness and every selected plugin at its lock pin (or --from for a local harness); Git downloads are disabled')
+    if (opts.offline && ((installNeeded && !opts.from) || states.some(s => s.action !== 'keep') || (coreState && coreState.action !== 'keep'))) {
+      throw new Refusal('--offline requires an installed harness, the core and every selected plugin at its lock pin (or --from for a local harness); Git downloads are disabled')
     }
     const common = { home, yes: true }
     if (installNeeded) await step('install', () => deps.install({ ...common, from: opts.from }))
+    if (deps.core) {
+      out('Core ' + (coreState.action === 'keep' ? 'kept at ' + coreState.ref : 'will be checked out at ' + corePin.commit))
+      await step('core', () => deps.core(corePin, { offline: !!opts.offline }))
+    }
     for (const [i, pin] of pins.entries()) {
       if (pin.pinState === 'unpushed-local') out('Warning: ' + pin.id + ' lock pin is marked unpushed-local; it must be reachable from its Git source.')
       if (states[i].action === 'keep') {
@@ -148,7 +202,7 @@ export async function runSetup(opts, home, deps) {
     await step('sync', () => deps.sync(common))
     await step('provision', () => (deps.provision ?? runProvision)({
       ...common, profile: 'full', minimal: false, plugins: selected.join(','),
-      allowWeakHash: !!opts.allowWeakHash, skip: opts.skip ?? [], offline: !!opts.offline,
+      allowWeakHash: !opts.strictHash, skip: opts.skip ?? [], offline: !!opts.offline,
     }, home, runtimeDeps))
     staticStatus = 'failed'
     await step('doctor', () => deps.doctor(common))
@@ -167,14 +221,19 @@ export async function runSetup(opts, home, deps) {
       return code
     })
     runtimeStatus = 'pass'
+    if (deps.writeProvisionRecord) {
+      const file = deps.writeProvisionRecord({ python: { path: python.path, version: python.version, managed: python.managed }, lockDigest: locked.lockDigest })
+      out('Router inputs recorded: ' + file)
+    }
+    if (deps.core) out('Core router: ' + quote(python.path) + ' ' + quote(path.join(home, 'core', 'forge', 'route.py')) + ' (img2 core-path prints the route.py path)')
     for (const row of rows) row.next = 'Restart your agent; follow the plugin instructions'
     if (selected.includes('jev')) {
       stage = 'Jev auth-status'
       const jev = rows.find(row => row.id === 'jev')
-      jev.next = 'Run python3 ' + quote(path.join(home, 'plugins/jev/tools/jev.py')) + ' auth-status in your terminal'
-      const status = await checkJevAuth(home, runtimeDeps)
+      jev.next = 'Run ' + quote(python.path) + ' ' + quote(path.join(home, 'plugins/jev/tools/jev.py')) + ' auth-status in your terminal'
+      const status = await checkJevAuth(home, runtimeDeps, python.path)
       if (status === 'missing') {
-        jev.next = loginCommand(home)
+        jev.next = loginCommand(home, python.path)
         out('Jev credential missing. Run this exact login command in your own terminal (TTY required; setup never handles the key):')
         out(jev.next)
         summary()

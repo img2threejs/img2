@@ -26,8 +26,8 @@ The `--yes` here belongs to **npx** (permission to download the CLI package); it
 `img2 setup` flag. From a source checkout of this repository, or if the CLI you resolved does not
 have a `setup` command yet, run `node bin/img2.mjs setup` from the checkout instead.
 
-`setup` asks which plugins you want, then installs, pins, syncs, provisions the runtime and
-audits the result.
+`setup` asks which plugins you want, then installs the pinned core and plugins, syncs, provisions the
+runtime and audits the result.
 
 | Plugin | What it provides | Git source |
 |---|---|---|
@@ -45,14 +45,14 @@ img2 setup                                  # prompt: Enter = all, or a comma li
 img2 setup --plugins cs2,jev                # explicit list; skips the prompt
 img2 setup --minimal                        # jev only (see below)
 img2 setup --yes                            # all five, no prompt
-img2 setup --allow-weak-hash                # explicit consent for hash-weak downloads
+img2 setup --strict-hash                    # refuse hash-weak downloads (default: accept and record)
 img2 setup --skip cs2-dotnet-runtime        # disable a dependency (repeatable)
 img2 setup --offline                        # no network; see below
 img2 setup --home /abs/path --from /path/to/harness-checkout
 ```
 
 Setup flags are only `--yes`, `--plugins`, `--minimal`, `--home`, `--from` (a local harness
-source), `--allow-weak-hash`, `--skip` and `--offline`.
+source), `--strict-hash`, `--skip` and `--offline` (`--allow-weak-hash` is still accepted; it is the default).
 
 - **Selection precedence:** explicit `--plugins` beats `--minimal`, which beats `--yes`. The prompt
   accepts Enter (all) or a comma-separated list of the IDs above; duplicates collapse, and unknown
@@ -61,9 +61,15 @@ source), `--allow-weak-hash`, `--skip` and `--offline`.
 - **`--minimal` here means “Jev only.”** It installs just `jev` but still provisions the full
   shared routing runtime. It is **not** the `img2 provision --minimal` profile, which drops
   vision, MCP servers and extra browsers.
-- **`--allow-weak-hash`** is explicit consent for entries the lock pins only by MD5/CRC32C or git
-  SHA-1 (Playwright browser bundles, some model files). Without it those entries are refused; with
-  it a locally computed SHA-256 is recorded in `provision.json`.
+- **Hash-weak entries are accepted by default.** The lock pins some entries only by MD5/CRC32C, git
+  SHA-1 or a GCS generation (Playwright browser bundles from the CDN, model configs). `setup` proceeds,
+  records a locally computed SHA-256 in `runtime/provision.json` and prints one `Notice:` line with the
+  count. **`--strict-hash`** refuses them instead, in preflight and before anything is changed (combine
+  with `--skip` to drop those dependencies). `img2 provision` on its own still needs `--allow-weak-hash`.
+- **Plugin tools run with the provisioned Python 3.11**, never the ambient `python3`
+  (`$IMG2_HOME/runtime/<digest>/runtime/python-runtime/bin/python3`). Setup prints the exact
+  interpreter. If `python-runtime` is skipped, setup needs a PATH Python ≥ 3.10 and refuses before
+  installing anything when it finds none; the login command it prints uses the same interpreter.
 - **`--skip <dependency-id>`** disables that dependency and everything that needs it. Repeat it for
   several IDs; take the IDs from `dependencies.lock.json`.
 - **`--offline`** needs an existing Git-installed harness (or a local `--from` source), selected
@@ -72,6 +78,11 @@ source), `--allow-weak-hash`, `--skip` and `--offline`.
 ### What setup does
 
 1. `install`, only if the harness checkout or installation metadata is absent.
+1b. `core`: check out the pinned core skill (`plugins.lock.json` `core`: repo
+   `img2threejs/img2threejs`, one exact commit) at `$IMG2_HOME/core`, verify `HEAD` equals the pin, and
+   link it into each detected host as `img2threejs` (a foreign file or symlink there is refused before
+   any download). `img2 core-path` prints `$IMG2_HOME/core/forge/route.py`, the router. `img2 install`
+   does the same unless `--no-core`; `img2 doctor` verifies commit, cleanliness, router and links.
 2. `add` each selected plugin at its **pinned** commit from `plugins.lock.json`, only for plugins
    that are missing or whose managed checkout differs from the pin.
 3. `sync` generated files.
@@ -80,8 +91,14 @@ source), `--allow-weak-hash`, `--skip` and `--offline`.
    character and interior are selected), browsers, Three, vision, CS2 tools and MCP servers.
 5. `doctor` (static installation audit).
 6. `doctor --runtime` (proves each runtime piece works).
-7. Jev credential status (`jev.py auth-status`, local-only), with the login command as the next
-   step when no credential is present.
+7. Jev credential status (`jev.py auth-status`, local-only, run with the provisioned Python), with the
+   login command as the next step when no credential is present.
+
+After step 6 setup writes `$IMG2_HOME/provision.json` (harness commit and launcher SHA-256, node, the
+installed plugin dirs, core path, interpreter) and prints the router command. That file is what the
+core's `scripts/e2e/route_one.py --home "$IMG2_HOME"` reads, so a clean home can route without
+hand-built inputs; the core's own pin check (`forge/route.py`) also requires the launcher's import
+closure to stay static (see `tests/launcher-closure.test.mjs`).
 
 Any step that fails or throws stops the later steps. Setup then prints a summary table
 (Plugin, Installed ref, Runtime units verified, Doctor, Next step) with the failing step name and

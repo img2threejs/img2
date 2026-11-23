@@ -17,6 +17,7 @@ const REPO = Object.fromEntries(IDS.map((id) => [id, 'https://github.com/img2thr
 const SECRET = 'sk-live-SECRETVALUE-0123456789'
 const HEADERS = ['Plugin', 'Installed ref', 'Runtime units verified', 'Doctor', 'Next step']
 const KIND = 'img2.jev-command'
+const CORE_COMMIT = 'c'.repeat(40)
 
 const setupOpts = (o = {}) => ({ yes: true, plugins: null, minimal: false, allowWeakHash: false, skip: [], offline: false, ...o })
 const code = (e) => e?.code
@@ -38,7 +39,7 @@ const MISSING = () => reply(jevJson('missing', 'credential-missing'), 3)
 
 // Recording harness: `log` holds the exact ordered calls ('install', 'add:<id>', 'sync', 'provision', 'doctor',
 // 'doctorRuntime', 'auth'); the detail arrays hold the arguments.
-function harness({ fx = pinnedFixture(), states = {}, installNeeded = false, codes = {}, throws = {}, auth = PRESENT, real = [], isTTY = false, ask, rd, keep = false } = {}) {
+function harness({ fx = pinnedFixture(), states = {}, installNeeded = false, codes = {}, throws = {}, auth = PRESENT, real = [], isTTY = false, ask, rd, keep = false, coreAction = 'keep' } = {}) {
   const log = []
   const out = []
   const tables = []
@@ -46,6 +47,8 @@ function harness({ fx = pinnedFixture(), states = {}, installNeeded = false, cod
   const adds = []
   const syncs = []
   const keeps = []
+  const cores = []
+  const records = []
   const provisions = []
   const doctors = []
   const runtimeDoctors = []
@@ -81,6 +84,9 @@ function harness({ fx = pinnedFixture(), states = {}, installNeeded = false, cod
       if (!c) state[opts.plugin] = { action: 'keep', ref: opts.ref }
       return c
     },
+    corePlan: () => ({ action: coreAction, ref: coreAction === 'keep' ? CORE_COMMIT : null }),
+    core: (pin, o) => step('core', () => cores.push({ pin, opts: o })),
+    writeProvisionRecord: (info) => { log.push('record'); records.push(info); return path.join('/record', 'provision.json') },
     sync: (opts) => step('sync', () => syncs.push({ opts })),
     doctor: (opts) => step('doctor', () => doctors.push({ opts })),
   }
@@ -94,11 +100,12 @@ function harness({ fx = pinnedFixture(), states = {}, installNeeded = false, cod
     })
   }
   const summaries = () => tables.filter((t) => t.headers[0] === 'Plugin')
-  return { deps, fx, log, out, tables, summaries, keeps, installs, adds, syncs, provisions, doctors, runtimeDoctors, authRuns, runtimeDeps, state, text: () => out.join('\n') + '\n' + JSON.stringify(tables) }
+  return { deps, fx, log, out, tables, summaries, keeps, cores, records, installs, adds, syncs, provisions, doctors, runtimeDoctors, authRuns, runtimeDeps, state, text: () => out.join('\n') + '\n' + JSON.stringify(tables) }
 }
 
 const homeOf = () => tmp('img2-setup-home-')
-const FULL = ['install', ...IDS.map((i) => 'add:' + i), 'sync', 'provision', 'doctor', 'doctorRuntime', 'auth']
+const managedPython = (fx, home) => path.join(home, 'runtime', loadLocks(fx.root).lockDigest.slice(0, 12), 'runtime', 'python-runtime', 'bin', 'python3')
+const FULL = ['install', 'core', ...IDS.map((i) => 'add:' + i), 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth']
 const SAFE = /^[a-zA-Z0-9_./:@=-]+$/
 const sq = (v) => (SAFE.test(v) ? v : "'" + v.replace(/'/g, "'\\''") + "'")
 
@@ -218,7 +225,7 @@ test('keep/add/replace: only plugins that need it are added; replace is forced; 
     },
   })
   assert.equal(await runSetup(setupOpts(), homeOf(), h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['add:cs2', 'add:interior', 'add:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'auth'])
+  assert.deepEqual(h.log, ['core', 'add:cs2', 'add:interior', 'add:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
   assert.equal(h.installs.length, 0)
   const byId = Object.fromEntries(h.adds.map((a) => [a.opts.plugin, a]))
   assert.ok(!byId.cs2.opts.force)
@@ -231,7 +238,7 @@ test('keep/add/replace: only plugins that need it are added; replace is forced; 
 test('only selected plugins are added, provisioned and doctored; selection reaches provision as a canonical CSV', async () => {
   const h = harness({ states: { cs2: { action: 'add', ref: null }, character: { action: 'add', ref: null }, pixi2d: { action: 'add', ref: null } } })
   assert.equal(await runSetup(setupOpts({ plugins: 'pixi2d,cs2,pixi2d' }), homeOf(), h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['add:cs2', 'add:pixi2d', 'sync', 'provision', 'doctor', 'doctorRuntime'])
+  assert.deepEqual(h.log, ['core', 'add:cs2', 'add:pixi2d', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record'])
   assert.equal(h.provisions[0].opts.plugins, 'cs2,pixi2d')
   assert.deepEqual(h.summaries()[0].rows.map((r) => r[0]), ['cs2', 'pixi2d'])
 })
@@ -257,7 +264,7 @@ test('provision receives profile full, the selection, yes, and the shared runtim
 test('--minimal installs only jev yet still provisions the full profile for it', async () => {
   const h = harness({ states: { jev: { action: 'add', ref: null } } })
   assert.equal(await runSetup(setupOpts({ minimal: true }), homeOf(), h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['add:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'auth'])
+  assert.deepEqual(h.log, ['core', 'add:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
   assert.equal(h.provisions[0].opts.plugins, 'jev')
   assert.equal(h.provisions[0].opts.profile, 'full')
   assert.equal(h.provisions[0].opts.minimal, false)
@@ -288,7 +295,7 @@ test('a TTY prompts once for the selection and does not ask again', async () => 
   assert.equal(asked.length, 1)
   for (const id of IDS) assert.ok(h.out.some((l) => l.includes(id)), 'the TTY prompt lists ' + id)
   assert.equal(h.provisions[0].opts.plugins, 'cs2,jev')
-  assert.deepEqual(h.log, ['add:cs2', 'sync', 'provision', 'doctor', 'doctorRuntime', 'auth'])
+  assert.deepEqual(h.log, ['core', 'add:cs2', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
 
   const enter = harness({ isTTY: true, ask: async () => '' })
   assert.equal(await runSetup(setupOpts({ yes: false }), homeOf(), enter.deps), 0, enter.text())
@@ -311,18 +318,38 @@ test('invalid selections return a refusal code and run nothing', async () => {
   }
 })
 
-test('--allow-weak-hash, --skip and --offline are forwarded to provision; defaults are off', async () => {
+test('--skip and --offline are forwarded to provision; weak hashes are accepted by default, --strict-hash refuses', async () => {
   const on = harness()
-  assert.equal(await runSetup(setupOpts({ allowWeakHash: true, skip: ['character-bpy', 'vision-torch'], offline: true }), homeOf(), on.deps), 0, on.text())
+  assert.equal(await runSetup(setupOpts({ skip: ['character-bpy', 'vision-torch'], offline: true }), homeOf(), on.deps), 0, on.text())
   assert.equal(on.provisions[0].opts.allowWeakHash, true)
   assert.deepEqual(on.provisions[0].opts.skip, ['character-bpy', 'vision-torch'])
   assert.equal(on.provisions[0].opts.offline, true)
 
   const off = harness()
   assert.equal(await runSetup(setupOpts(), homeOf(), off.deps), 0, off.text())
-  assert.equal(off.provisions[0].opts.allowWeakHash, false)
+  assert.equal(off.provisions[0].opts.allowWeakHash, true, 'one-command setup proceeds with weak-integrity artifacts')
+  const notice = off.out.filter((l) => l.startsWith('Notice: '))
+  assert.equal(notice.length, 1)
+  assert.match(notice[0], /^Notice: 1 artifact\(s\) have no SHA-256 in the lock/)
+  assert.match(notice[0], /--strict-hash/)
   assert.deepEqual(off.provisions[0].opts.skip ?? [], [])
   assert.equal(off.provisions[0].opts.offline, false)
+})
+
+test('--strict-hash refuses weak-integrity artifacts before anything runs; it conflicts with --allow-weak-hash', async () => {
+  const strict = harness()
+  assert.equal(await runSetup(setupOpts({ strictHash: true }), homeOf(), strict.deps), 2, strict.text())
+  assert.deepEqual(strict.log, [], 'refused in preflight, before install, core, add or provision')
+  assert.match(strict.text(), /--strict-hash: 1 artifact\(s\) have no SHA-256 in the lock/)
+  assert.match(strict.text(), /Nothing was changed/)
+  // skipping the one weak dependency (and what needs it) leaves nothing to refuse
+  const skipped = harness()
+  const code = await runSetup(setupOpts({ strictHash: true, skip: ['browser-chromium-1.64.0'] }), homeOf(), skipped.deps)
+  assert.equal(code, 0, skipped.text())
+  assert.equal(skipped.provisions[0].opts.allowWeakHash, false)
+  const both = harness()
+  assert.equal(await runSetup(setupOpts({ strictHash: true, allowWeakHash: true }), homeOf(), both.deps), 2, both.text())
+  assert.deepEqual(both.log, [])
 })
 
 test('--offline refuses before any network git install of a missing harness or plugin', async () => {
@@ -371,10 +398,10 @@ test('an invalid or foreign lock pin is refused before any step runs; an unpushe
 test('a keep state calls the optional repair seam in order and a failing repair stops setup', async () => {
   const h = harness({ keep: true })
   assert.equal(await runSetup(setupOpts({ plugins: 'cs2,jev' }), homeOf(), h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['keep:cs2', 'keep:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'auth'])
+  assert.deepEqual(h.log, ['core', 'keep:cs2', 'keep:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
   const bad = harness({ keep: true, codes: { 'keep:cs2': 1 } })
   assert.equal(await runSetup(setupOpts({ plugins: 'cs2,jev' }), homeOf(), bad.deps), 1, bad.text())
-  assert.deepEqual(bad.log, ['keep:cs2'])
+  assert.deepEqual(bad.log, ['core', 'keep:cs2'])
   assert.match(bad.text(), /repair cs2/)
 })
 
@@ -436,7 +463,7 @@ test('repeating setup keeps the pins: the second run adds nothing but still sync
   h.out.length = 0
   h.tables.length = 0
   assert.equal(await runSetup(setupOpts(), home, h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['sync', 'provision', 'doctor', 'doctorRuntime', 'auth'])
+  assert.deepEqual(h.log, ['core', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
   assert.equal(h.adds.length, IDS.length, 'no second add')
   assert.equal(h.installs.length, 1)
   assert.deepEqual(refs, COMMIT)
@@ -466,12 +493,12 @@ test('missing Jev auth prints the exact shell-safe login command and returns 3',
   const script = path.join(home, 'plugins/jev/tools/jev.py')
   assert.equal(h.authRuns.length, 1)
   const call = h.authRuns[0]
-  assert.equal(call.file, 'python3')
+  assert.equal(call.file, managedPython(h.fx, home), 'Jev runs with the provisioned python-runtime, never the ambient python3')
   assert.deepEqual(call.args, [script, 'auth-status'])
   assert.equal(call.opts.env.IMG2_HOME, home)
   assert.ok(Number.isFinite(call.opts.timeout) && call.opts.timeout > 0 && call.opts.timeout <= 300_000, 'bounded timeout')
-  assert.ok(h.out.some((l) => l.includes(`IMG2_HOME=${sq(home)} python3 ${sq(script)} login`)), h.text())
-  assert.deepEqual(h.log.slice(-3), ['doctor', 'doctorRuntime', 'auth'])
+  assert.ok(h.out.some((l) => l.includes(`IMG2_HOME=${sq(home)} ${sq(managedPython(h.fx, home))} ${sq(script)} login`)), h.text())
+  assert.deepEqual(h.log.slice(-4), ['doctor', 'doctorRuntime', 'record', 'auth'])
 })
 
 test('the login command quotes spaces and apostrophes with POSIX escaping and only when needed', async () => {
@@ -481,7 +508,7 @@ test('the login command quotes spaces and apostrophes with POSIX escaping and on
   const h = harness({ auth: MISSING })
   assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 3, h.text())
   const script = path.join(home, 'plugins/jev/tools/jev.py')
-  const want = `IMG2_HOME=${sq(home)} python3 ${sq(script)} login`
+  const want = `IMG2_HOME=${sq(home)} ${sq(managedPython(h.fx, home))} ${sq(script)} login`
   assert.ok(want.includes("'\\''"), 'fixture exercises the apostrophe escape')
   assert.ok(h.out.some((l) => l.includes(want)), h.text())
 
@@ -489,7 +516,7 @@ test('the login command quotes spaces and apostrophes with POSIX escaping and on
   const safe = homeOf()
   assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), safe, plain.deps), 3)
   const line = plain.out.find((l) => l.startsWith('IMG2_HOME='))
-  assert.ok(line.includes(`IMG2_HOME=${safe} python3 ${path.join(safe, 'plugins/jev/tools/jev.py')} login`), 'safe tokens are not quoted')
+  assert.ok(line.includes(`IMG2_HOME=${safe} ${managedPython(plain.fx, safe)} ${path.join(safe, 'plugins/jev/tools/jev.py')} login`), 'safe tokens are not quoted')
 })
 
 test('present Jev auth returns 0 and prints no login command', async () => {
@@ -524,7 +551,7 @@ test('Jev auth storage errors and malformed output return 1 without echoing raw 
     assert.ok(!text.includes('credential-missing') || name === 'missing with exit 0', name)
     assert.ok(!text.includes('Traceback'), name + ' dumped raw stderr')
     assert.ok(!text.includes('definitely not json'), name + ' dumped raw stdout')
-    assert.ok(!/python3 [^\n]* login/.test(text), name + ' must not suggest login for a non-missing failure')
+    assert.ok(!/ [^\n]*\/python3 [^\n]* login/.test(text), name + ' must not suggest login for a non-missing failure')
     assert.match(text, /Setup stopped at Jev auth-status \(exit 1\)/)
   }
 })
@@ -569,7 +596,7 @@ test('real runtime: setup provisions, a repeat reuses verified units, a damaged 
   }
 
   assert.equal(await runSetup(opts, rd.home, h.deps), 0, h.text() + '\n' + rd.errs.join('\n'))
-  assert.deepEqual(h.log, ['sync', 'doctor', 'auth'], 'real provision and runtime doctor are not recorded by the stubs')
+  assert.deepEqual(h.log, ['core', 'sync', 'doctor', 'record', 'auth'], 'real provision and runtime doctor are not recorded by the stubs')
   const first = receipt()
   assert.equal(first.status, 'ok')
   assert.ok(first.units.length > 3)
@@ -583,7 +610,7 @@ test('real runtime: setup provisions, a repeat reuses verified units, a damaged 
   assert.ok(fetched > 0)
   reset()
   assert.equal(await runSetup(opts, rd.home, h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['sync', 'doctor', 'auth'])
+  assert.deepEqual(h.log, ['core', 'sync', 'doctor', 'record', 'auth'])
   assert.equal(h.adds.length, 0)
   assert.equal(rd.download.calls.length, fetched, 'no new downloads')
   const second = receipt()
@@ -612,7 +639,7 @@ test('a real runtime doctor failure stops setup before the Jev auth probe and re
   // the stubbed provision "succeeds" without building, so the real runtime doctor finds no completed provision
   const h = harness({ fx, rd, real: ['doctorRuntime'], auth: PRESENT })
   assert.equal(await runSetup(setupOpts({ allowWeakHash: true }), rd.home, h.deps), 1, h.text())
-  assert.deepEqual(h.log, ['sync', 'provision', 'doctor'])
+  assert.deepEqual(h.log, ['core', 'sync', 'provision', 'doctor'])
   assert.equal(h.authRuns.length, 0)
   assert.match(h.text(), /Setup stopped at doctor --runtime \(exit 1\)/)
   assert.ok(runtimeReport(h).rows.some((r) => r[0] === 'fail'))
@@ -624,7 +651,7 @@ test('a real runtime provision failure surfaces exit 1 and stops before the doct
   const rd = makeDeps(fx, { run: stubRunner({ failOn: ['venv'] }) })
   const h = harness({ fx, rd, real: ['provision', 'doctorRuntime'], auth: PRESENT })
   assert.equal(await runSetup(setupOpts({ allowWeakHash: true }), rd.home, h.deps), 1, h.text())
-  assert.deepEqual(h.log, ['sync'])
+  assert.deepEqual(h.log, ['core', 'sync'])
   assert.equal(h.authRuns.length, 0)
   assert.match(h.text(), /Setup stopped at provision \(exit 1\)/)
   assert.equal(JSON.parse(fs.readFileSync(path.join(rd.home, 'runtime', 'provision.json'), 'utf8')).status, 'failed')
@@ -639,4 +666,76 @@ test('real runtime with --offline and an unprimed cache refuses before building 
   assert.notEqual(code2, 0, h.text())
   assert.equal(rd.download.calls.length, 0, 'offline never downloads')
   assert.equal(h.authRuns.length, 0)
+})
+
+// ---------------------------------------------------------------- tool python, core, router inputs
+
+test('the Python for plugin tools is printed and is the managed 3.11, even when the ambient python3 is 3.9', async () => {
+  const h = harness()
+  const home = homeOf()
+  h.runtimeDeps.env = { PATH: '/usr/bin:/bin' }
+  const probed = []
+  const prev = h.runtimeDeps.run
+  h.runtimeDeps.run = async (f, a, o) => { probed.push(f); return prev(f, a, o) }
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 0, h.text())
+  const line = h.out.find((l) => l.startsWith('Plugin tools run with Python '))
+  assert.equal(line, 'Plugin tools run with Python 3.11.18 (managed python-runtime, provisioned by this setup): ' + managedPython(h.fx, home))
+  assert.deepEqual(probed, [managedPython(h.fx, home)], 'only the managed interpreter ran (the Jev auth probe); no ambient python was consulted')
+  assert.equal(h.authRuns[0].file, managedPython(h.fx, home))
+})
+
+test('without the managed runtime setup needs a PATH python >= 3.10 and fails before install/provision when there is none', async () => {
+  const bin = tmp('img2-pybin-')
+  const fake = (name) => { fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 }) }
+  fake('python3')
+  const versions = { [path.join(bin, 'python3')]: '3.9.6' }
+  const run = async (f, a) => ({ code: 0, signal: null, stdout: a.includes('-c') ? versions[f] + '\n' : '', stderr: '', timedOut: false, error: null })
+  const h = harness({ rd: makeDeps(pinnedFixture(), { run }) })
+  h.runtimeDeps.env = { PATH: bin }
+  const code3 = await runSetup(setupOpts({ plugins: 'jev', skip: ['python-runtime'] }), homeOf(), h.deps)
+  assert.equal(code3, 2, h.text())
+  assert.deepEqual(h.log, [], 'nothing ran: no install, no download, no provision')
+  assert.match(h.text(), /needs a Python >= 3\.10/)
+  assert.match(h.text(), new RegExp(path.join(bin, 'python3').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' = 3\\.9\\.6'))
+
+  fake('python3.12')
+  versions[path.join(bin, 'python3.12')] = '3.12.4'
+  const ok = harness({ rd: makeDeps(pinnedFixture(), { run }) })
+  ok.runtimeDeps.env = { PATH: bin }
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev', skip: ['python-runtime'] }), homeOf(), ok.deps), 0, ok.text())
+  assert.ok(ok.out.includes('Plugin tools run with Python 3.12.4 (system): ' + path.join(bin, 'python3.12')))
+  assert.equal(ok.authRuns[0].file, path.join(bin, 'python3.12'))
+})
+
+test('the core is planned in preflight, checked out right after install, and its absence offline is refused early', async () => {
+  const h = harness({ installNeeded: true, coreAction: 'add', states: { cs2: { action: 'add', ref: null } } })
+  assert.equal(await runSetup(setupOpts({ plugins: 'cs2' }), homeOf(), h.deps), 0, h.text())
+  assert.deepEqual(h.log.slice(0, 3), ['install', 'core', 'add:cs2'])
+  assert.equal(h.cores[0].pin.commit, CORE_COMMIT)
+  assert.equal(h.cores[0].opts.offline, false)
+  assert.ok(h.out.some((l) => l === 'Core will be checked out at ' + CORE_COMMIT))
+
+  const off = harness({ coreAction: 'update' })
+  assert.equal(await runSetup(setupOpts({ plugins: 'cs2', offline: true }), homeOf(), off.deps), 2, off.text())
+  assert.deepEqual(off.log, [])
+  assert.match(off.text(), /--offline requires an installed harness, the core/)
+
+  const refused = harness()
+  refused.deps.corePlan = () => { throw Object.assign(new Error('core link is occupied by a foreign symlink'), { code: 2 }) }
+  assert.equal(await runSetup(setupOpts({ plugins: 'cs2' }), homeOf(), refused.deps), 2, refused.text())
+  assert.deepEqual(refused.log, [], 'a foreign host link stops setup before any mutation')
+})
+
+test('setup records the router inputs after the runtime doctor and names the router command', async () => {
+  const h = harness()
+  const home = homeOf()
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 0, h.text())
+  assert.equal(h.records.length, 1)
+  assert.deepEqual(h.records[0].python, { path: managedPython(h.fx, home), version: '3.11.18', managed: true })
+  assert.equal(h.records[0].lockDigest, loadLocks(h.fx.root).lockDigest)
+  assert.ok(h.log.indexOf('record') > h.log.indexOf('doctorRuntime'))
+  assert.ok(h.out.some((l) => l === 'Core router: ' + managedPython(h.fx, home) + ' ' + path.join(home, 'core/forge/route.py') + ' (img2 core-path prints the route.py path)'), h.text())
+  const failing = harness({ codes: { doctorRuntime: 1 } })
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), homeOf(), failing.deps), 1)
+  assert.equal(failing.records.length, 0, 'no record when the runtime did not verify')
 })

@@ -2,6 +2,7 @@
 // Every subprocess call goes through execFileSync with an argv array -- no shell, so no path or ref
 // can be interpolated into a command line.
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,8 +10,10 @@ import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { ui } from './ui.mjs'
 import { CATALOG_URL, getCatalog } from './catalog.mjs'
+import { coreDir, coreState, ensureCoreCheckout, routePathOf } from './core.mjs'
 import { Refusal as ProvisionRefusal } from './runtime/errors.mjs'
-import { realDeps, runProvision } from './runtime/provision.mjs'
+import { loadLocks } from './runtime/lock.mjs'
+import { managedPythonPath, realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
 import { runSetup } from './setup.mjs'
 
@@ -97,6 +100,9 @@ const lockPath = (H) => path.join(H, '.lock')
 const autoInstallPath = (H) => path.join(H, 'auto-install')
 const cloneDir = (H, id) => path.join(pluginsDir(H), id)
 const linkName = (id) => LINK_PREFIX + id
+// The core skill (forge/route.py) is pinned in plugins.lock.json and linked into hosts as `img2threejs`.
+const coreLinkTarget = (key) => path.join(HOSTS[key].skills(), LEGACY_LINK_NAME)
+const asCliError = (e) => (e instanceof ProvisionRefusal ? new CliError(e.code, e.message, e.detail) : e)
 const localStanza = (H) => 'CORE = ' + JSON.stringify(harnessDir(H)) + '\n'
 
 export function harnessVersion() {
@@ -1242,11 +1248,33 @@ async function cmdInstall(opts) {
       ui.ok('Opt-in recorded: `img2 ensure` may add missing public official catalog plugins')
       ui.detail('Marker', ui.path(autoInstallPath(H)))
     }
+    if (opts.noCore) ui.info('Core skill skipped (--no-core); `img2 setup` or `img2 install` without --no-core adds it')
+    else installCore(H, loadLocks().plugins.core, { out: true })
     ui.ok('Harness ready')
     return EXIT.OK
   } finally {
     releaseLock()
   }
+}
+
+// Clone/advance the core at its lock pin, then link it into every detected host skill dir. The caller holds
+// the home lock. Foreign occupants of a host link path are refused before any download.
+function installCore(H, pin, { offline = false, out = false } = {}) {
+  const hosts = detectedHosts()
+  for (const key of hosts) assertClaimable(coreLinkTarget(key), H)
+  let result
+  try { result = ensureCoreCheckout(H, pin, { offline }) } catch (e) { throw asCliError(e) }
+  for (const key of hosts) {
+    const target = coreLinkTarget(key)
+    const outcome = ensureLink(target, coreDir(H), H)
+    recordReceipt(H, { host: key, plugin: 'core', target, canonical: coreDir(H) })
+    if (out) ui.table(['Host', 'Status', 'Skill'], [[HOSTS[key].label, outcome, ui.path(target)]], { statusColumn: 1 })
+  }
+  if (out) {
+    ui.ok('Core ' + result.action + ' at ' + result.head)
+    ui.detail('Router', ui.path(routePathOf(H)))
+  }
+  return result
 }
 
 // Newest reachable semver tag on a remote, or null if it has none (untagged, or tags that don't
@@ -1597,7 +1625,7 @@ async function cmdList(opts) {
 // Setup owns sequencing; these adapters retain the existing registry, Git and host-link rules.
 async function cmdSetup(opts, args) {
   if (args.length) throw new CliError(EXIT.REFUSED, 'setup takes no positional arguments')
-  const allowed = new Set(['home', 'from', 'yes', 'plugins', 'minimal', 'skip', 'offline', 'allowWeakHash', 'help', 'showVersion'])
+  const allowed = new Set(['home', 'from', 'yes', 'plugins', 'minimal', 'skip', 'offline', 'allowWeakHash', 'strictHash', 'help', 'showVersion'])
   for (const [key, value] of Object.entries(opts)) {
     if (allowed.has(key) || value === null || value === false) continue
     throw new CliError(EXIT.REFUSED, 'setup does not support --' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase()))
@@ -1630,7 +1658,19 @@ async function cmdSetup(opts, args) {
       const actual = git(['rev-parse', 'HEAD'], dir)
       return { action: actual === pin.commit && row.resolvedSha === actual ? 'keep' : 'replace', ref: actual }
     },
-    install: cmdInstall,
+    // setup runs the core step itself (corePlan/core), so install must not repeat it
+    install: o => cmdInstall({ ...o, noCore: true }),
+    corePlan: pin => {
+      for (const key of detectedHosts()) assertClaimable(coreLinkTarget(key), H)
+      let state
+      try { state = coreState(H, pin) } catch (e) { throw asCliError(e) }
+      return { action: state.state === 'at-pin' ? 'keep' : state.state === 'absent' ? 'add' : 'update', ref: state.head }
+    },
+    core: (pin, { offline }) => {
+      acquireLock(H)
+      try { return installCore(H, pin, { offline }) ? EXIT.OK : EXIT.FAIL } finally { releaseLock() }
+    },
+    writeProvisionRecord: info => writeProvisionRecord(H, info),
     add: cmdAdd,
     keep: pin => {
       acquireLock(H)
@@ -1649,6 +1689,34 @@ async function cmdSetup(opts, args) {
   })
 }
 
+// scripts/e2e/route_one.py in the core reads <home>/provision.json: the pins HarnessPin verifies plus the jev dir.
+// Written only after setup proved every step; contains no secret, only paths and public hashes.
+export function writeProvisionRecord(H, { python, lockDigest }) {
+  const hd = harnessDir(H)
+  const launcher = path.join(hd, 'bin', 'img2.mjs')
+  const node = fs.realpathSync(process.execPath)
+  const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+  const plugins = {}
+  for (const row of readRegistry(H).plugins) {
+    plugins[row.id] = { sha: row.resolvedSha, resolvedSha: row.resolvedSha, installedDir: cloneDir(H, row.id) }
+  }
+  const record = {
+    kind: 'img2.setup-provision', version: 1, status: 'ok', writtenAt: new Date().toISOString(),
+    img2Home: H, lockDigest,
+    python: python ?? null,
+    core: { dir: coreDir(H), route: routePathOf(H), commit: git(['rev-parse', 'HEAD'], coreDir(H)) },
+    pins: {
+      harnessSha: git(['rev-parse', 'HEAD'], hd), harnessRoot: hd,
+      harnessExecutable: launcher, harnessExecutableSha256: sha256(launcher),
+      node, nodeSha256: sha256(node), plugins,
+    },
+  }
+  const file = path.join(H, 'provision.json')
+  fs.writeFileSync(file + '.tmp', JSON.stringify(record, null, 2) + '\n', { mode: 0o600 })
+  fs.renameSync(file + '.tmp', file)
+  return file
+}
+
 // Runtime provisioning is its own module tree (bin/runtime); here it only gets argv, home and exit codes.
 async function cmdProvision(opts) {
   const deps = realDeps()
@@ -1661,12 +1729,59 @@ async function cmdProvision(opts) {
   }
 }
 
+// Prints where the router lives so a clean home can run it: <home>/core/forge/route.py.
+async function cmdCorePath(opts) {
+  const H = resolveImg2Home(opts.home)
+  const route = routePathOf(H)
+  if (!fs.existsSync(route)) {
+    throw new CliError(EXIT.FAIL, 'no core router at ' + route, 'run `img2 setup` (or `img2 install`) to check out the pinned core')
+  }
+  if (opts.json) {
+    let python = null
+    try {
+      const candidate = managedPythonPath(H, loadLocks().lockDigest)
+      if (fs.existsSync(candidate)) python = candidate
+    } catch { /* reported as null: the runtime has not been provisioned */ }
+    console.log(JSON.stringify({ core: coreDir(H), route, commit: git(['rev-parse', 'HEAD'], coreDir(H)), python }))
+  } else {
+    console.log(route)
+  }
+  return EXIT.OK
+}
+
 async function cmdDoctorRuntime(opts) {
   try {
     return await runDoctorRuntime({ home: resolveImg2Home(opts.home), json: opts.json, deps: realDeps() })
   } catch (e) {
     if (e instanceof ProvisionRefusal) throw new CliError(e.code, e.message, e.detail)
     throw e
+  }
+}
+
+// The core is judged against plugins.lock.json "core": right repo, exact commit, clean, route.py present, and
+// every detected host's `img2threejs` link pointing at it. Absent is a WARN (nothing to judge), anything
+// present but wrong is a FAIL.
+function doctorCore(H, err, warn, info) {
+  let pin
+  try { pin = loadLocks().plugins.core } catch (e) { err('core', 'cannot read the core pin: ' + e.message); return }
+  const dir = coreDir(H)
+  if (!fs.existsSync(dir)) {
+    warn('core', 'core is not installed at ' + dir + '; run `img2 setup` or `img2 install` (pin ' + pin.commit.slice(0, 7) + ')')
+    return
+  }
+  let state
+  try { state = coreState(H, pin) } catch (e) { err('core', e.message); return }
+  if (state.state !== 'at-pin') err('core', 'core is at ' + state.head + ', not the pinned ' + pin.commit + '; run `img2 setup`')
+  else info('core', 'core at pinned ' + pin.commit.slice(0, 7))
+  if (!fs.existsSync(routePathOf(H))) err('core', routePathOf(H) + ' is missing')
+  for (const key of detectedHosts()) {
+    const target = coreLinkTarget(key)
+    const c = classifyTarget(target)
+    if (c.state === 'absent') err('core', key + ' link missing at ' + target + '; run `img2 setup`')
+    else if (c.state !== 'symlink') err('core', key + ': ' + target + ' is a ' + c.state + ', not an img2-owned symlink; refusing to touch it')
+    else if (!underHome(c.resolved, H)) err('core', key + ': ' + target + ' -> ' + c.resolved + ' is outside ' + H + '; refusing to touch it')
+    else if (c.dangling) err('core', key + ': ' + target + ' dangles (-> ' + c.resolved + ')')
+    else if (!samePath(c.resolved, dir)) err('core', key + ': ' + target + ' points at ' + c.resolved + ', not at ' + dir)
   }
 }
 
@@ -1686,11 +1801,14 @@ async function cmdDoctor(opts) {
   }
   if (!fs.existsSync(harnessDir(H))) err(null, 'no harness checkout at ' + harnessDir(H) + '; run `img2 install`')
 
+  doctorCore(H, err, warn, info)
+
   // The base skill's own link is not harness-owned (it is not a row in plugins.json), so doctor
   // cannot judge it -- it can only report the target, which is what makes a wrong-working-copy
   // install visible instead of silently invisible.
   for (const key of detectedHosts()) {
-    const baseLink = path.join(HOSTS[key].skills(), LEGACY_LINK_NAME)
+    if (fs.existsSync(coreDir(H))) continue // doctorCore judged the core link
+    const baseLink = coreLinkTarget(key)
     const c = classifyTarget(baseLink)
     if (c.state === 'symlink') {
       info(null, key + ': base skill "' + LEGACY_LINK_NAME + '" -> ' + c.resolved + (c.dangling ? ' (dangling)' : ''))
@@ -2362,8 +2480,9 @@ async function cmdPlugins(opts, args) {
 // ---------------------------------------------------------------- entry
 
 const HELP_COMMANDS = [
-  ['img2 install', 'Set up the harness and supported agent hosts'],
-  ['img2 setup [--yes | --plugins a,b | --minimal]', 'Choose plugins (default all), install pinned sources and verify the full runtime'],
+  ['img2 install [--no-core]', 'Set up the harness, the pinned core and supported agent hosts'],
+  ['img2 setup [--yes | --plugins a,b | --minimal] [--strict-hash]', 'Choose plugins (default all), install the pinned core and plugins and verify the full runtime'],
+  ['img2 core-path [--json]', 'Print where the pinned core router (forge/route.py) lives under $IMG2_HOME/core'],
   ['img2 plugins [--json]', 'Discover officially announced plugins'],
   ['img2 add <plugin-id>', 'Install by catalog ID: character, cs2, interior, jev, pixi2d'],
   ['img2 add <org/repo | url>', 'Install directly from a Git repository'],
@@ -2407,7 +2526,9 @@ function printHelp() {
     ['--plugins <a,b,c>', 'setup/provision: select plugins; setup precedence: --plugins > --minimal > --yes'],
     ['--skip <dependency-id>', 'setup/provision: disable a dependency and everything needing it (repeatable)'],
     ['--offline', 'setup/provision: verified runtime cache only; setup also requires pinned local Git installs'],
-    ['--allow-weak-hash', 'setup/provision: explicitly accept weaker lock hashes; records a local SHA-256'],
+    ['--allow-weak-hash', 'provision: explicitly accept weaker lock hashes; records a local SHA-256 (setup accepts them by default)'],
+    ['--strict-hash', 'setup: refuse artifacts whose lock pins no SHA-256 instead of accepting them'],
+    ['--no-core', 'install: skip checking out the pinned core'],
     ['--remove', 'provision: remove the provisioned runtime'],
     ['--runtime', 'doctor: probe the provisioned runtime instead of the installation'],
     ['--version, -v', 'Show version and exit'],
@@ -2449,6 +2570,8 @@ export function parseArgs(argv) {
     skip: null,
     offline: false,
     allowWeakHash: false,
+    strictHash: false,
+    noCore: false,
     remove: false,
     runtime: false,
     help: false,
@@ -2475,6 +2598,8 @@ export function parseArgs(argv) {
     else if (a === '--minimal') opts.minimal = true
     else if (a === '--offline') opts.offline = true
     else if (a === '--allow-weak-hash') opts.allowWeakHash = true
+    else if (a === '--strict-hash') opts.strictHash = true
+    else if (a === '--no-core') opts.noCore = true
     else if (a === '--remove') opts.remove = true
     else if (a === '--runtime') opts.runtime = true
     else if (a === '--profile') opts.profile = take(a, argv[++i])
@@ -2499,6 +2624,7 @@ export function parseArgs(argv) {
 const COMMANDS = {
   install: (opts) => cmdInstall(opts),
   setup: (opts, args) => cmdSetup(opts, args),
+  'core-path': (opts) => cmdCorePath(opts),
   add: (opts, args) => cmdAdd(opts, args[0]),
   remove: (opts, args) => cmdRemove(opts, args[0]),
   list: (opts) => cmdList(opts),
@@ -2549,7 +2675,7 @@ async function main() {
   if (!handler) {
     throw new CliError(EXIT.REFUSED, 'unknown command: ' + command, 'expected ' + Object.keys(COMMANDS).join(', '))
   }
-  if (!opts.json && command !== 'capabilities') ui.banner()
+  if (!opts.json && command !== 'capabilities' && command !== 'core-path') ui.banner()
   return handler(opts, args)
 }
 

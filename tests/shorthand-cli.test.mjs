@@ -97,7 +97,7 @@ function install(sb) {
   fs.writeFileSync(path.join(dir, 'README.md'), 'Fixture harness.\n')
   fs.cpSync(CORE, path.join(dir, 'img2_core'), { recursive: true, filter: src => !src.includes('__pycache__') })
   commit(sb, dir)
-  run(sb, ['install', '--from', dir, '--yes'])
+  run(sb, ['install', '--from', dir, '--yes', '--no-core']) // the pinned core has its own offline tests (core.test.mjs)
 }
 
 function registrations(sb) {

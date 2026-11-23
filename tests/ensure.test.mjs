@@ -100,8 +100,10 @@ function sandbox(t) {
   return sb
 }
 
+// Install tests exercise the harness layout offline; the pinned core checkout has its own tests (core.test.mjs).
+const offlineInstall = args => (args[0] === 'install' && !args.includes('--no-core') ? [...args, '--no-core'] : args)
 function run(sb, args, expected = 0, env = {}) {
-  const result = spawnSync(process.execPath, [BIN, ...args], {
+  const result = spawnSync(process.execPath, [BIN, ...offlineInstall(args)], {
     cwd: sb.root, env: { ...sb.env, ...env }, encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
   })
   assert.equal(result.status, expected, JSON.stringify(args) + '\n' + result.stdout + result.stderr + (result.error || ''))

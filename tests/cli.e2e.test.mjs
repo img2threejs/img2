@@ -223,8 +223,10 @@ function makeSandbox(t) {
   return { root, HOME, H, env }
 }
 
+// Install tests exercise the harness layout offline; the pinned core checkout has its own tests (core.test.mjs).
+const offlineInstall = args => (args[0] === 'install' && !args.includes('--no-core') ? [...args, '--no-core'] : args)
 function run(args, env, cwd) {
-  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env, cwd })
+  return spawnSync(process.execPath, [BIN, ...offlineInstall(args)], { encoding: 'utf8', env, cwd })
 }
 
 function installed(t) {

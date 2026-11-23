@@ -11,7 +11,24 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ## [Unreleased]
 
+### Fixed
+
+- The core router's harness pin check (`HarnessPin._imports`) accepts the launcher again: `bin/locks.mjs`
+  moved to `bin/runtime/locks.mjs` (only `./` imports are provable) and every probe program that used
+  `require(`/`import(` moved out of `bin/` into data files under `runtime-probes/` that
+  `bin/runtime/probe-source.mjs` reads and hands to the provisioned Node. `tests/launcher-closure.test.mjs`
+  guards the rule.
+- `setup` no longer exits 2 on a clean home: hash-weak artifacts are accepted by default with a one-line
+  notice and a locally computed SHA-256 in the receipt; `--strict-hash` refuses them.
+- Plugin tools (Jev `auth-status`, the printed login command) run with the provisioned Python 3.11, not the
+  ambient `python3`; setup refuses in preflight when it needs a Python >= 3.10 and has none.
+
 ### Added
+
+- The core skill is pinned in `plugins.lock.json` (`core`, validated by `validateCorePin`), checked out by
+  `img2 install` (skip with `--no-core`) and `img2 setup` at `$IMG2_HOME/core`, linked into hosts as
+  `img2threejs`, and verified by `img2 doctor`. `img2 core-path [--json]` prints where `forge/route.py` is.
+- `setup` writes `$IMG2_HOME/provision.json` for the core's `scripts/e2e/route_one.py`.
 
 - `img2 setup`: choose from all five plugins (Enter defaults to all), or use `--yes`, `--plugins`
   or Jev-only `--minimal`. Installs missing harness/source pins from `plugins.lock.json`, repairs

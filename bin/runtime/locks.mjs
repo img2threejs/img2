@@ -128,6 +128,23 @@ function invariantErrors(byId) {
   return errors
 }
 
+export const CORE_REPO = 'https://github.com/img2threejs/img2threejs'
+
+// The core skill (forge/route.py, preflight) is pinned beside the plugins: one exact commit, checked out
+// under $IMG2_HOME/core by install/setup and verified by doctor.
+export function validateCorePin(core) {
+  if (!isObject(core)) return ['core pin is required (plugins.lock.json "core")']
+  const errors = []
+  if (core.id !== 'core') errors.push('core: id must be "core"')
+  if (core.repo !== CORE_REPO) errors.push(`core: repo must be ${CORE_REPO}`)
+  if (!COMMIT.test(core.commit ?? '')) errors.push('core: commit must be a 40-hex SHA')
+  if (!nonEmpty(core.branch)) errors.push('core: branch is required')
+  if (core.pinState !== 'on-origin' && core.pinState !== 'unpushed-local') errors.push('core: pinState must be on-origin or unpushed-local')
+  if (!nonEmpty(core.note)) errors.push('core: note is required')
+  else if (core.pinState === 'unpushed-local' && !/unpushed/i.test(core.note)) errors.push('core: unpushed-local pin must say so in note')
+  return errors
+}
+
 export function validatePluginsLock(lock, catalog) {
   const errors = []
   const err = m => errors.push(m)
@@ -156,5 +173,6 @@ export function validatePluginsLock(lock, catalog) {
     else if (p.pinState === 'unpushed-local' && !/unpushed/i.test(p.note)) err(`${p.id}: unpushed-local pin must say so in note`)
   }
   for (const id of sources.keys()) if (!seen.has(id)) err(`catalog plugin ${id} is missing from plugins.lock.json`)
+  errors.push(...validateCorePin(lock.core))
   return errors
 }

@@ -142,6 +142,7 @@ export function makeFixture({ mutate } = {}) {
   }
   const pluginsLock = {
     schema: 1, defaultInstall: 'all',
+    core: { id: 'core', repo: 'https://github.com/img2threejs/img2threejs', commit: 'c'.repeat(40), branch: 'main', pinState: 'on-origin', note: 'fixture' },
     plugins: ['character', 'cs2', 'interior', 'jev', 'pixi2d'].map((id) => ({ id, capability: id, selectable: true, default: true })),
   }
   mutate?.(lock, bytes)

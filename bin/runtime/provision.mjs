@@ -13,6 +13,8 @@ import { runProbes } from './probes.mjs'
 import { buildSelectors, checkSelectorPath, writeEnvSh, writeSelectors, selectorsPath, envShPath } from './selectors.mjs'
 
 export const runtimeRootOf = (home) => path.join(home, 'runtime')
+// The provisioned CPython 3.11 every plugin tool must run with (never the ambient python3).
+export const managedPythonPath = (home, lockDigest) => path.join(runtimeRootOf(home), lockDigest.slice(0, 12), 'runtime', 'python-runtime', 'bin', 'python3')
 const OWNED_FILES = ['selectors.json', 'env.sh', 'provision.json', '.provision.lock']
 const DIGEST_DIR = /^[0-9a-f]{12}$/
 

@@ -2,6 +2,14 @@
   "schema": 1,
   "generatedAt": "2026-11-23",
   "defaultInstall": "all",
+  "core": {
+    "id": "core",
+    "repo": "https://github.com/img2threejs/img2threejs",
+    "commit": "9337dd5442aa7f3111797a2d315b1c69ac233246",
+    "branch": "feat/textured-routing-install",
+    "pinState": "on-origin",
+    "note": "commit is origin/feat/textured-routing-install HEAD (git ls-remote 2026-11-23), not on origin/main; merge or re-pin before a release"
+  },
   "plugins": [
     {
       "id": "character",

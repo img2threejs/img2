@@ -62,6 +62,15 @@ function installedFixture(t) {
   const sha = git(dir, ['rev-parse', 'HEAD'], sb.env)
   const pins = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins.lock.json'), 'utf8'))
   Object.assign(pins.plugins.find(p => p.id === 'cs2'), { commit: sha, pinState: 'on-origin' })
+  // An installed core already at its pin keeps the offline repair path free of Git downloads.
+  const core = path.join(sb.H, 'core')
+  fs.mkdirSync(path.join(core, 'forge'), { recursive: true })
+  git(core, ['init', '-q'], sb.env)
+  git(core, ['remote', 'add', 'origin', 'https://github.com/img2threejs/img2threejs'], sb.env)
+  fs.writeFileSync(path.join(core, 'forge/route.py'), '# router\n')
+  git(core, ['add', '.'], sb.env)
+  git(core, ['commit', '-qm', 'fixture'], sb.env)
+  pins.core.commit = git(core, ['rev-parse', 'HEAD'], sb.env)
   fs.writeFileSync(path.join(cli, 'plugins.lock.json'), JSON.stringify(pins))
   fs.writeFileSync(path.join(sb.H, 'plugins.json'), JSON.stringify({ version: 1, plugins: [{ id: 'cs2', repo: 'img2threejs/plugin-cs2', ref: sha, resolvedSha: sha }] }))
   fs.writeFileSync(path.join(sb.H, 'receipts.json'), '[]')
@@ -73,9 +82,11 @@ test('setup CLI repairs pinned host links and generated files on repeat without 
   const link = path.join(sb.home, '.claude/skills/img2-cs2')
   for (let i = 0; i < 2; i++) {
     const r = run(sb, ['--plugins', 'cs2', '--offline'], sb.bin)
-    // Real provision refuses hash-weak artifacts before touching runtime; earlier repairs still run.
+    // Real offline provision refuses (no verified cache) before touching runtime; earlier repairs still run.
     assert.equal(r.code, 2, r.text)
     assert.match(r.text, /Setup stopped at provision/)
+    assert.match(r.text, /Core kept at /)
+    assert.equal(fs.realpathSync(path.join(sb.home, '.claude/skills/img2threejs')), fs.realpathSync(path.join(sb.H, 'core')))
     assert.match(r.text, /Kept cs2 at/)
     assert.equal(fs.realpathSync(link), sb.dir)
     assert.equal(fs.existsSync(path.join(sb.H, 'generated/routes.json')), true)
@@ -102,4 +113,14 @@ test('setup CLI preserves dirty and local registrations rather than replacing th
   assert.match(r.text, /local or foreign registration/)
   assert.equal(fs.readFileSync(skill, 'utf8'), 'user changes\n')
   assert.equal(fs.existsSync(path.join(sb.H, 'generated')), false)
+})
+
+test('setup CLI --strict-hash refuses the lock\'s hash-weak artifacts in preflight, before any change', t => {
+  const sb = installedFixture(t)
+  const r = run(sb, ['--plugins', 'cs2', '--offline', '--strict-hash'], sb.bin)
+  assert.equal(r.code, 2, r.text)
+  assert.match(r.text, /--strict-hash: \d+ artifact\(s\) have no SHA-256 in the lock/)
+  assert.doesNotMatch(r.text, /Kept cs2/)
+  assert.equal(fs.existsSync(path.join(sb.H, 'generated')), false)
+  assert.equal(fs.existsSync(path.join(sb.home, '.claude/skills')), false)
 })
