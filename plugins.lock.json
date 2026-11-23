@@ -15,12 +15,12 @@
       "id": "character",
       "capability": "rigged character",
       "repo": "https://github.com/img2threejs/plugin-character",
-      "commit": "88854a4117ad32f9b168d3f14425794ae339d414",
+      "commit": "3ae440079e9181792983c405f8a2dabeef657528",
       "visibility": "public",
       "selectable": true,
       "default": true,
       "pinState": "on-origin",
-      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
+      "note": "commit is on origin (origin/feat/routed-workflow), not on origin/main; merge or re-pin before a release"
     },
     {
       "id": "cs2",
