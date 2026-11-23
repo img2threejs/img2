@@ -12,6 +12,7 @@ import { CATALOG_URL, getCatalog } from './catalog.mjs'
 import { Refusal as ProvisionRefusal } from './runtime/errors.mjs'
 import { realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
+import { runSetup } from './setup.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
@@ -1593,6 +1594,61 @@ async function cmdList(opts) {
   return EXIT.OK
 }
 
+// Setup owns sequencing; these adapters retain the existing registry, Git and host-link rules.
+async function cmdSetup(opts, args) {
+  if (args.length) throw new CliError(EXIT.REFUSED, 'setup takes no positional arguments')
+  const allowed = new Set(['home', 'from', 'yes', 'plugins', 'minimal', 'skip', 'offline', 'allowWeakHash', 'help', 'showVersion'])
+  for (const [key, value] of Object.entries(opts)) {
+    if (allowed.has(key) || value === null || value === false) continue
+    throw new CliError(EXIT.REFUSED, 'setup does not support --' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase()))
+  }
+  const H = resolveImg2Home(opts.home)
+  return runSetup(opts, H, {
+    installNeeded: () => {
+      if (fs.existsSync(harnessDir(H)) && !isGitRepo(harnessDir(H))) {
+        throw new CliError(EXIT.REFUSED, 'harness path is not a Git checkout; move it aside before setup')
+      }
+      return !fs.existsSync(harnessDir(H)) || !fs.existsSync(registryPath(H)) || !fs.existsSync(receiptsPath(H))
+    },
+    pluginState: pin => {
+      const row = findRow(readRegistry(H), pin.id)
+      const dir = cloneDir(H, pin.id)
+      const target = classifyTarget(dir)
+      if (!row) {
+        if (target.state !== 'absent') throw new CliError(EXIT.REFUSED, 'unregistered plugin path exists: ' + dir, 'move it aside or register it explicitly; setup will not overwrite it')
+        return { action: 'add', ref: null }
+      }
+      const normalize = source => String(source).replace(/\.git$/, '').replace(/^https:\/\/github\.com\//, '')
+      if (row.repo?.startsWith('link:') || normalize(row.repo) !== normalize(pin.repo) || target.state === 'symlink') {
+        throw new CliError(EXIT.REFUSED, 'setup will not replace local or foreign registration ' + pin.id, 'use explicit img2 add --force only if replacement is intended')
+      }
+      if (target.state === 'absent') return { action: 'replace', ref: null }
+      if (!isGitRepo(dir) || normalize(git(['remote', 'get-url', 'origin'], dir)) !== normalize(pin.repo)) {
+        throw new CliError(EXIT.REFUSED, 'setup requires a managed official Git checkout for ' + pin.id)
+      }
+      if (git(['status', '--porcelain'], dir)) throw new CliError(EXIT.REFUSED, 'setup will not overwrite dirty checkout ' + dir, 'preserve your changes before rerunning setup')
+      const actual = git(['rev-parse', 'HEAD'], dir)
+      return { action: actual === pin.commit && row.resolvedSha === actual ? 'keep' : 'replace', ref: actual }
+    },
+    install: cmdInstall,
+    add: cmdAdd,
+    keep: pin => {
+      acquireLock(H)
+      try {
+        const dir = cloneDir(H, pin.id)
+        for (const key of detectedHosts()) {
+          const target = path.join(HOSTS[key].skills(), linkName(pin.id))
+          ensureLink(target, dir, H)
+          recordReceipt(H, { host: key, plugin: pin.id, target, canonical: dir })
+        }
+        return EXIT.OK
+      } finally { releaseLock() }
+    },
+    sync: cmdSync,
+    doctor: cmdDoctor,
+  })
+}
+
 // Runtime provisioning is its own module tree (bin/runtime); here it only gets argv, home and exit codes.
 async function cmdProvision(opts) {
   const deps = realDeps()
@@ -2307,6 +2363,7 @@ async function cmdPlugins(opts, args) {
 
 const HELP_COMMANDS = [
   ['img2 install', 'Set up the harness and supported agent hosts'],
+  ['img2 setup [--yes | --plugins a,b | --minimal]', 'Choose plugins (default all), install pinned sources and verify the full runtime'],
   ['img2 plugins [--json]', 'Discover officially announced plugins'],
   ['img2 add <plugin-id>', 'Install by catalog ID: character, cs2, interior, jev, pixi2d'],
   ['img2 add <org/repo | url>', 'Install directly from a Git repository'],
@@ -2346,11 +2403,11 @@ function printHelp() {
     ['--plugin <id>', 'add: require this identity; capabilities: select this provider'],
     ['--json', 'version/doctor/plugins/provision --plan: machine-readable output; capabilities: implied'],
     ['--plan', 'provision: print the plan and sizes, write nothing'],
-    ['--profile <full|minimal>, --minimal', 'provision: full (default) or minimal (no vision, MCP or extra browsers)'],
-    ['--plugins <a,b,c>', 'provision: install only these plugins (default: all five)'],
-    ['--skip <dependency-id>', 'provision: disable a dependency and everything needing it (repeatable)'],
-    ['--offline', 'provision: use only the verified download cache'],
-    ['--allow-weak-hash', 'provision: accept artifacts the lock pins only by MD5/CRC32C/git SHA-1; records a local SHA-256'],
+    ['--profile <full|minimal>, --minimal', 'provision: runtime profile; setup --minimal: Jev only, with full shared routing runtime'],
+    ['--plugins <a,b,c>', 'setup/provision: select plugins; setup precedence: --plugins > --minimal > --yes'],
+    ['--skip <dependency-id>', 'setup/provision: disable a dependency and everything needing it (repeatable)'],
+    ['--offline', 'setup/provision: verified runtime cache only; setup also requires pinned local Git installs'],
+    ['--allow-weak-hash', 'setup/provision: explicitly accept weaker lock hashes; records a local SHA-256'],
     ['--remove', 'provision: remove the provisioned runtime'],
     ['--runtime', 'doctor: probe the provisioned runtime instead of the installation'],
     ['--version, -v', 'Show version and exit'],
@@ -2441,6 +2498,7 @@ export function parseArgs(argv) {
 // so it cannot list a command the dispatcher does not actually have.
 const COMMANDS = {
   install: (opts) => cmdInstall(opts),
+  setup: (opts, args) => cmdSetup(opts, args),
   add: (opts, args) => cmdAdd(opts, args[0]),
   remove: (opts, args) => cmdRemove(opts, args[0]),
   list: (opts) => cmdList(opts),

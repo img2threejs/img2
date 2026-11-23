@@ -13,6 +13,12 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Added
 
+- `img2 setup`: choose from all five plugins (Enter defaults to all), or use `--yes`, `--plugins`
+  or Jev-only `--minimal`. Installs missing harness/source pins from `plugins.lock.json`, repairs
+  managed links, syncs, provisions the full selected runtime and runs both doctors. Supports explicit
+  weak-hash consent, dependency skips and offline repair; stops on the first failure with a summary.
+  Jev's own `auth-status` determines whether to print the exact TTY login command (exit 3);
+  setup never accepts credentials or grants disclosure/paid-call consent.
 - `dependencies.lock.json` (schema 1): pinned install manifest for everything `img2threejs` needs (separate
   character bpy 4.5.15 and interior bpy 4.3.0 environments, NumPy/Pillow, Three 0.186.1 and the interior
   viewer's 0.180.0, Playwright 1.64.0 + Chromium, Node >=22, pixi.js, Vite, gltf-validator, esbuild,
