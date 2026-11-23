@@ -27,7 +27,7 @@
       "id": "jev",
       "description": "Bounded four-purpose image-aware decision advisories plus legacy Environment checkpoint and repair advice; never acceptance authority.",
       "source": "img2threejs/plugin-jev",
-      "access": "private",
+      "access": "public",
       "npmCli": null
     },
     {

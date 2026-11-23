@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generatedAt": "2026-11-22",
+  "generatedAt": "2026-11-23",
   "defaultInstall": "all",
   "plugins": [
     {
@@ -11,8 +11,8 @@
       "visibility": "public",
       "selectable": true,
       "default": true,
-      "pinState": "unpushed-local",
-      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is 377ddf8. Push or re-pin before bundling"
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
     },
     {
       "id": "cs2",
@@ -22,8 +22,8 @@
       "visibility": "public",
       "selectable": true,
       "default": true,
-      "pinState": "unpushed-local",
-      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is b62f904. Push or re-pin before bundling"
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
     },
     {
       "id": "interior",
@@ -33,19 +33,19 @@
       "visibility": "public",
       "selectable": true,
       "default": true,
-      "pinState": "unpushed-local",
-      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is f2c3667. Push or re-pin before bundling"
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
     },
     {
       "id": "jev",
       "capability": "Jev decisions",
       "repo": "https://github.com/img2threejs/plugin-jev",
       "commit": "ea15e4b0748f6af266c5b956041d974d1c01002f",
-      "visibility": "private",
+      "visibility": "public",
       "selectable": true,
       "default": true,
-      "pinState": "unpushed-local",
-      "note": "unpushed local commit (sibling worktree HEAD, branch feat/jev-four-decisions); not on origin, origin/main is origin/. Push or re-pin before bundling"
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
     },
     {
       "id": "pixi2d",

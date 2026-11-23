@@ -25,7 +25,7 @@ const code = (e) => e?.code
 function pinnedFixture(over = {}) {
   const fx = makeFixture(over)
   fx.pluginsLock.plugins = IDS.map((id) => ({
-    id, capability: id, repo: REPO[id], commit: COMMIT[id], visibility: id === 'jev' ? 'private' : 'public', selectable: true, default: true,
+    id, capability: id, repo: REPO[id], commit: COMMIT[id], visibility: 'public', selectable: true, default: true,
   }))
   fs.writeFileSync(path.join(fx.root, 'plugins.lock.json'), JSON.stringify(fx.pluginsLock, null, 2))
   return fx

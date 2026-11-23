@@ -13,7 +13,7 @@ export const SETUP_PLUGINS = [
   { id: 'character', description: 'Rigged characters, skin conditioning and animation.' },
   { id: 'cs2', description: 'Counter-Strike 2 weapon and glove skins.' },
   { id: 'interior', description: 'Textured interior scenes, Blender/PBR and GLB delivery.' },
-  { id: 'jev', description: 'Image-aware routing and bounded decision advice (private Git access).' },
+  { id: 'jev', description: 'Image-aware routing and bounded decision advice.' },
   { id: 'pixi2d', description: 'Editable 2D reference reconstruction in PixiJS.' },
 ]
 const allIds = () => SETUP_PLUGINS.map(p => p.id)

@@ -35,12 +35,12 @@ test('plugin pins: full SHA, catalog-matching repo/visibility, default-on, hones
     assert.equal(p.default, true)
     assert.equal(p.selectable, true)
   }
-  assert.equal(lock.plugins.find(p => p.id === 'jev').visibility, 'private')
+  assert.equal(lock.plugins.find(p => p.id === 'jev').visibility, 'public')
   const bad = plugins(); bad.plugins[0].commit = 'abc123'
   assert.match(validatePluginsLock(bad, catalog).join('\n'), /40-hex/)
   const leak = plugins(); leak.plugins[0].capability = 'plugin-character'
   assert.match(validatePluginsLock(leak, catalog).join('\n'), /repository name/)
-  const hidden = plugins(); hidden.plugins.find(p => p.pinState === 'unpushed-local').note = 'pinned'
+  const hidden = plugins(); Object.assign(hidden.plugins[0], { pinState: 'unpushed-local', note: 'pinned' })
   assert.match(validatePluginsLock(hidden, catalog).join('\n'), /must say so/)
 })
 
