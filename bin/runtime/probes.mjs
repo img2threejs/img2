@@ -6,6 +6,7 @@ import { cleanEnv, mcpHandshake } from './exec.mjs'
 import { atomicWriteFile, rmrf } from './fsx.mjs'
 import crypto from 'node:crypto'
 import { artifactsOf } from './lock.mjs'
+import { probeSource } from './probe-source.mjs'
 
 export const venvPython = (unitDir) => path.join(unitDir, 'venv', 'bin', 'python')
 export const nodeRootOf = (unitDir) => path.join(unitDir, 'node')
@@ -203,7 +204,7 @@ const NODE_THREE = async (pctx, deps) => {
   const root = nodeRootOf(pctx.unitDir)
   const out = []
   for (const d of deps) {
-    const t = await nodeRun(pctx, root, 'import * as T from "three"\nimport fs from "node:fs"\nconst v = JSON.parse(fs.readFileSync("node_modules/three/package.json", "utf8")).version\nconsole.log(JSON.stringify({ revision: T.REVISION, version: v, mesh: typeof T.Mesh }))', { esm: true })
+    const t = await nodeRun(pctx, root, probeSource('three-import.mjs'), { esm: true })
     const rev = d.entry.version.split('.')[1]
     out.push(check('node-three-import', d.id, !t.problem && t.json.version === d.entry.version && t.json.revision === rev && t.json.mesh === 'function',
       'import three ' + d.entry.version + ' (REVISION ' + rev + ')', t.problem ?? 'three ' + t.json.version + ' REVISION ' + t.json.revision, { path: root, stderr: t.stderr, remedy: 'img2 provision' }))
@@ -223,13 +224,7 @@ const VITE_BUILD = async (pctx, deps) => {
     // vite/rollup resolve symlinks (macOS /tmp -> /private/tmp); a symlinked root makes html asset names relative-escaping
     const realDir = fs.realpathSync(dir)
     const out = path.join(realDir, 'dist')
-    const t = await nodeRun(pctx, root, [
-      'const { build, version } = await import("vite")',
-      'await build({ root: ' + JSON.stringify(realDir) + ', logLevel: "silent", configFile: false, build: { outDir: ' + JSON.stringify(out) + ', emptyOutDir: true } })',
-      'const fs = await import("node:fs")',
-      'const files = fs.readdirSync(' + JSON.stringify(path.join(out, 'assets')) + ')',
-      'console.log(JSON.stringify({ vite: version, assets: files }))',
-    ].join('\n'), { esm: true, timeout: 180_000 })
+    const t = await nodeRun(pctx, root, probeSource('vite-build.mjs', { root: realDir, out, assets: path.join(out, 'assets') }), { esm: true, timeout: 180_000 })
     const ok = !t.problem && t.json.vite === vite.entry.version && t.json.assets.some((f) => f.endsWith('.js'))
     return [check('viewer-vite-build', vite.id, ok, 'vite ' + vite.entry.version + ' bundles a module importing three', t.problem ?? JSON.stringify(t.json), { path: root, stderr: t.stderr, remedy: 'img2 provision' })]
   } finally { rmrf(dir) }
@@ -257,13 +252,7 @@ const GLTF_VALIDATE = async (pctx, deps) => {
   const d = deps.find((x) => x.entry.name === 'gltf-validator')
   if (!d) return []
   const b64 = tinyGlb().toString('base64')
-  const t = await nodeRun(pctx, root, [
-    'const v = await import("gltf-validator")',
-    'const api = v.default ?? v',
-    'const bytes = new Uint8Array(Buffer.from(' + JSON.stringify(b64) + ', "base64"))',
-    'const report = await api.validateBytes(bytes)',
-    'console.log(JSON.stringify({ errors: report.issues.numErrors, warnings: report.issues.numWarnings, version: report.validatorVersion }))',
-  ].join('\n'), { esm: true })
+  const t = await nodeRun(pctx, root, probeSource('gltf-validate.mjs', { b64 }), { esm: true })
   return [check('gltf-validate', d.id, !t.problem && t.json.errors === 0, 'gltf-validator reports 0 errors for a one-triangle GLB', t.problem ?? 'errors=' + t.json.errors + ' warnings=' + t.json.warnings + ' validator ' + t.json.version, { path: root, stderr: t.stderr, remedy: 'img2 provision' })]
 }
 
@@ -271,7 +260,7 @@ const PIXI = async (pctx, deps) => {
   const root = nodeRootOf(pctx.unitDir)
   const out = []
   for (const d of deps) {
-    const t = await nodeRun(pctx, root, 'const fs = require("node:fs")\nconst v = JSON.parse(fs.readFileSync("node_modules/' + d.entry.name + '/package.json", "utf8")).version\nif (' + JSON.stringify(d.entry.name) + ' === "playwright") require("playwright")\nconsole.log(JSON.stringify({ version: v }))')
+    const t = await nodeRun(pctx, root, probeSource('package-version.cjs', { name: d.entry.name }))
     out.push(check('pixi-replay-runtime-lock', d.id, !t.problem && t.json.version === d.entry.version, d.entry.name + '@' + d.entry.version, t.problem ?? d.entry.name + '@' + t.json.version, { path: root, stderr: t.stderr, remedy: 'img2 provision' }))
   }
   return out
@@ -281,7 +270,7 @@ const ESBUILD = async (pctx, deps) => {
   const root = nodeRootOf(pctx.unitDir)
   const d = deps.find((x) => x.entry.name === 'esbuild')
   if (!d) return []
-  const t = await nodeRun(pctx, root, 'const e = require("esbuild")\nconst r = e.buildSync({ stdin: { contents: "export const x = 1" }, bundle: true, write: false, format: "esm" })\nconsole.log(JSON.stringify({ version: e.version, out: r.outputFiles[0].text.length > 0 }))')
+  const t = await nodeRun(pctx, root, probeSource('esbuild-build.cjs'))
   return [check('esbuild-build', d.id, !t.problem && t.json.version === d.entry.version && t.json.out === true, 'esbuild ' + d.entry.version + ' bundles a module', t.problem ?? JSON.stringify(t.json), { path: root, stderr: t.stderr, remedy: 'img2 provision (the platform binary @esbuild/<os>-<cpu> must be present)' })]
 }
 
@@ -291,36 +280,8 @@ async function launchProbe(pctx, { cwd, mod, browsers, types, depId, remedy }) {
   const out = []
   for (const type of types) {
     const isChromium = type === 'chromium'
-    const channel = depId === 'browser-mcp-playwright' && isChromium ? ', channel: "chrome-for-testing"' : ''
-    const launch = isChromium
-      ? 'const b = await t.launch({ headless: true' + channel + ', args: ["--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] })'
-      : 'const b = await t.launch({ headless: true })'
-    const body = isChromium
-      ? [
-        '  await p.setContent("<canvas id=c width=16 height=16></canvas>")',
-        '  const r = await p.evaluate(() => {',
-        '    const gl = c.getContext("webgl2") || c.getContext("webgl")',
-        '    if (!gl) return { error: "no WebGL context" }',
-        '    gl.clearColor(1, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT)',
-        '    const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px)',
-        '    return { gl: gl.getParameter(gl.VERSION), px: Array.from(px) }',
-        '  })',
-      ]
-      : ['  const r = {}']
-    const t = await script(pctx, nodeBin(pctx), ['-e', [
-      '(async () => {',
-      '  const pw = require(' + JSON.stringify(mod) + ')',
-      '  const t = pw[' + JSON.stringify(type) + ']',
-      '  ' + launch,
-      '  const p = await b.newPage()',
-      '  await p.goto("data:text/html,<title>img2-runtime-probe</title>")',
-      '  const title = await p.title()',
-      ...body,
-      '  const version = b.version()',
-      '  await b.close()',
-      '  console.log(JSON.stringify({ version, title, ...r }))',
-      '})().catch((e) => { console.error(String(e && e.stack || e).slice(0, 1500)); process.exit(1) })',
-    ].join('\n')], { cwd, env: { PLAYWRIGHT_BROWSERS_PATH: browsers }, timeout: 120_000 })
+    const channel = depId === 'browser-mcp-playwright' && isChromium ? 'chrome-for-testing' : null
+    const t = await script(pctx, nodeBin(pctx), ['-e', probeSource('browser-launch.cjs', { mod, type, chromium: isChromium, channel })], { cwd, env: { PLAYWRIGHT_BROWSERS_PATH: browsers }, timeout: 120_000 })
     const ok = !t.problem && t.json.title === 'img2-runtime-probe' && (!isChromium || (!t.json.error && t.json.px?.[0] === 255 && t.json.px?.[1] === 0 && t.json.px?.[2] === 0))
     out.push(check('chromium-webgl-capture', depId, ok,
       type + ' launches headless and loads the probe page' + (isChromium ? ' and renders a red WebGL clear' : ''),

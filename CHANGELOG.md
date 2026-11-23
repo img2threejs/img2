@@ -26,7 +26,7 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   Entries are `resolved` or `unresolved` with a reason; unresolved ones (mostly artifacts whose registry
   publishes no SHA-256) must be resolved before a release.
 - `plugins.lock.json` (schema 1): pinned commit, capability name, visibility and default-on selection for
-  each approved plugin. `bin/locks.mjs` validates both files.
+  each approved plugin. `bin/runtime/locks.mjs` validates both files.
 - `img2 provision`: reads the locks and installs every runtime dependency under
   `$IMG2_HOME/runtime/<lock digest>/<environment>/`, one atomic unit per environment (separate bpy 4.5.15 and
   4.3.0 venvs, hash-pinned pip wheels, npm roots from SRI-verified tarballs, Chromium through the pinned

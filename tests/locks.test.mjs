@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { validateDependenciesLock, validatePluginsLock } from '../bin/locks.mjs'
+import { validateDependenciesLock, validatePluginsLock } from '../bin/runtime/locks.mjs'
 
 const read = name => JSON.parse(fs.readFileSync(new URL(`../${name}`, import.meta.url), 'utf8'))
 const deps = () => read('dependencies.lock.json')

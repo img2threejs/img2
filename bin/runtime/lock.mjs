@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateDependenciesLock, validatePluginsLock } from '../locks.mjs'
+import { validateDependenciesLock, validatePluginsLock } from './locks.mjs'
 import { Refusal } from './errors.mjs'
 import { sha256Hex } from './fsx.mjs'
 

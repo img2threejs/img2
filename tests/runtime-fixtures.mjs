@@ -239,7 +239,7 @@ export function stubRunner({ failOn = [], failProbe = [], webgl = true } = {}) {
         return json({ revision: v.split('.')[1], version: v, mesh: 'function' })
       }
       if (code.includes('node_modules/')) {
-        const name = /node_modules\/([^/"]+)\/package\.json/.exec(code)[1]
+        const name = /^const P = \{"name":"([^"]+)"\}/.exec(code)[1]
         return json({ version: JSON.parse(fs.readFileSync(path.join(opts.cwd, 'node_modules', name, 'package.json'), 'utf8')).version })
       }
       return bad('unknown node probe')

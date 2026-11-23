@@ -10,6 +10,7 @@ import { artifactsOf, integrityOf } from './lock.mjs'
 import { installNpmRoot } from './npmroot.mjs'
 import { evaluatePipCheck } from './pipcheck.mjs'
 import { threeInventoryDigest } from './selectors.mjs'
+import { probeSource } from './probe-source.mjs'
 import { browsersOf, cliRootOf, nodeRootOf, venvPython } from './probes.mjs'
 
 export const PROVISION_SCHEMA = 1
@@ -192,8 +193,7 @@ async function buildBrowser(ctx, unit, stage, dep, cliDep) {
     fs.cpSync(browsers, path.join(cacheDir, 'tree'), { recursive: true, verbatimSymlinks: true })
     atomicWriteFile(recorded, digest + '\n', 0o600)
   }
-  const exec = await ctx.exec(unit.name, 'playwright executablePath', path.join(ctx.rtDir, 'runtime', 'node-runtime', 'bin', 'node'), ['-e',
-    'process.stdout.write(JSON.stringify({ chromium: require("playwright-core").chromium.executablePath() }))'], {
+  const exec = await ctx.exec(unit.name, 'playwright executablePath', path.join(ctx.rtDir, 'runtime', 'node-runtime', 'bin', 'node'), ['-e', probeSource('playwright-executable-path.cjs')], {
     cwd: cliRootOf(stage), env: { PLAYWRIGHT_BROWSERS_PATH: browsers }, timeout: 60_000,
   })
   let exe = null

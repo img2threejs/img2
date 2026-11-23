@@ -21,6 +21,7 @@
     "img2_core",
     "docs",
     "templates",
+    "runtime-probes",
     "dependencies.lock.json",
     "plugins.lock.json",
     "!**/__pycache__/**",
