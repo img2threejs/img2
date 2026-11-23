@@ -54,7 +54,7 @@ function fixture(t, { pillow = true } = {}) {
     kind: 'img2.setup-provision', version: 1, status: 'ok', img2Home: H, lockDigest: DIGEST,
     python: { path: python, version: '3.11.18', managed: true },
     core: { dir: path.join(H, 'core'), route: path.join(H, 'core', 'forge', 'route.py'), commit: SHA },
-    pins: { harnessSha: SHA, harnessRoot: hd, harnessExecutable: launcher, harnessExecutableSha256: sha256(fs.readFileSync(launcher)), node: path.join(nodeDir, 'node'), nodeSha256: 'c'.repeat(64), plugins: {} },
+    pins: { harnessSha: SHA, harnessRoot: hd, harnessExecutable: launcher, harnessExecutableSha256: sha256(fs.readFileSync(launcher)), node: path.join(nodeDir, 'node'), nodeSha256: sha256(fs.readFileSync(path.join(nodeDir, 'node'))), plugins: {} },
   }))
   fs.writeFileSync(path.join(H, 'runtime', 'provision.json'), JSON.stringify({
     schema: 2, status: 'ok', lockDigest: DIGEST,
@@ -189,6 +189,95 @@ test('the route interpreter is a real copy (not a symlink) whose only extra impo
   assert.equal(ensureRouteInterpreter(loaded, pillow, { probe: probeOk }).python, made.python)
   assert.equal(fs.statSync(made.python).ino, ino, 'unchanged inputs: reused, not rebuilt')
   assert.throws(() => ensureRouteInterpreter(loaded, pillow, { probe: () => ({ code: 1, stdout: '', stderr: 'ModuleNotFoundError: PIL' }) }), /cannot import Pillow/)
+})
+
+const routeDir = (fx) => path.join(fx.rt, 'route-python')
+const routePth = (fx) => path.join(routeDir(fx), 'lib', 'python3.11', 'site-packages', 'img2-route.pth')
+
+test('a Pillow site that is not one canonical single-line directory inside the runtime is never written to a .pth', t => {
+  const fx = fixture(t)
+  const loaded = loadRouteRecord(fx.H)
+  const pillow = findPillowEnv(loaded)
+  const outside = path.join(fx.root, 'outside')
+  fs.mkdirSync(outside)
+  const nl = path.join(fx.rt, 'jev', 'x\nimport os')
+  fs.mkdirSync(nl)
+  const evil = [
+    '/x\nimport os; os.system("touch /tmp/pwned")', '/x\rimport os', '/x\0y', '/x\timport os', 'import os', '#' + pillow.site,
+    'relative/site-packages', outside, fx.rt, fx.rt + '/jev/venv/../venv/lib/python3.11/site-packages', nl,
+  ]
+  for (const site of evil) {
+    assert.throws(() => ensureRouteInterpreter(loaded, { ...pillow, site }, { probe: probeOk }), (e) => e instanceof Refusal && /Pillow site-packages/.test(e.message), JSON.stringify(site))
+    assert.ok(!fs.existsSync(routeDir(fx)), 'nothing was built for ' + JSON.stringify(site))
+  }
+  ensureRouteInterpreter(loaded, pillow, { probe: probeOk })
+  assert.equal(fs.readFileSync(routePth(fx), 'utf8'), fs.realpathSync(fx.site) + '\n', 'exactly one line, the verified site')
+})
+
+test('python.version is validated and pyvenv.cfg comes from a fixed template', t => {
+  const fx = fixture(t)
+  const loaded = loadRouteRecord(fx.H)
+  const pillow = findPillowEnv(loaded)
+  for (const version of ['3.11.18\ninclude-system-site-packages = true', '3.11', '3.11.18 ', 'x.y.z', 3.11, undefined, '3.11.18\r\n']) {
+    const record = { ...loaded.record, python: { ...loaded.record.python, version, extra: 'home = /evil' } }
+    assert.throws(() => ensureRouteInterpreter({ ...loaded, record }, pillow, { probe: probeOk }), (e) => e instanceof Refusal && /MAJOR\.MINOR\.PATCH/.test(e.message), JSON.stringify(version))
+    assert.ok(!fs.existsSync(routeDir(fx)))
+  }
+  ensureRouteInterpreter(loaded, pillow, { probe: probeOk })
+  assert.equal(fs.readFileSync(path.join(routeDir(fx), 'pyvenv.cfg'), 'utf8'), 'home = ' + fx.pyBin + '\ninclude-system-site-packages = false\nversion = 3.11.18\n')
+})
+
+test('a cached route-python whose pyvenv.cfg or .pth was altered is rebuilt even though the stamp still matches', t => {
+  const fx = fixture(t)
+  const loaded = loadRouteRecord(fx.H)
+  const pillow = findPillowEnv(loaded)
+  ensureRouteInterpreter(loaded, pillow, { probe: probeOk })
+  const cfgFile = path.join(routeDir(fx), 'pyvenv.cfg')
+  const cfg = fs.readFileSync(cfgFile, 'utf8')
+  const pth = fs.readFileSync(routePth(fx), 'utf8')
+  fs.writeFileSync(cfgFile, cfg.replace('= false', '= true'))
+  ensureRouteInterpreter(loaded, pillow, { probe: probeOk })
+  assert.equal(fs.readFileSync(cfgFile, 'utf8'), cfg, 'pyvenv.cfg restored')
+  fs.writeFileSync(routePth(fx), pth + 'import os\n')
+  ensureRouteInterpreter(loaded, pillow, { probe: probeOk })
+  assert.equal(fs.readFileSync(routePth(fx), 'utf8'), pth, '.pth restored')
+})
+
+test('a digest directory that is a symlink out of the runtime tree is refused', t => {
+  const fx = fixture(t)
+  const loaded = loadRouteRecord(fx.H)
+  const outside = path.join(fx.root, 'elsewhere')
+  fs.renameSync(fx.rt, outside)
+  fs.symlinkSync(outside, fx.rt)
+  assert.throws(() => findPillowEnv(loaded), (e) => e instanceof Refusal && /not a real directory inside/.test(e.message))
+})
+
+test('a Pillow site-packages that is a symlink out of the runtime tree is refused', t => {
+  const fx = fixture(t)
+  const loaded = loadRouteRecord(fx.H)
+  const outside = path.join(fx.root, 'outside-site')
+  fs.mkdirSync(path.join(outside, 'PIL'), { recursive: true })
+  fs.rmSync(fx.site, { recursive: true })
+  fs.symlinkSync(outside, fx.site)
+  assert.throws(() => findPillowEnv(loaded), (e) => /no PIL under its site-packages/.test(e.detail))
+})
+
+test('a recorded node that is missing or not executable is refused, never replaced by the ambient PATH node', t => {
+  const fx = fixture(t)
+  const node = path.join(fx.nodeDir, 'node')
+  const host = { PATH: [path.dirname(process.execPath), '/usr/bin'].join(path.delimiter) }
+  fs.chmodSync(node, 0o644)
+  assert.throws(() => buildRouteEnv(loadRouteRecord(fx.H), host), (e) => e instanceof Refusal && /does not exist or is not executable/.test(e.message) && /img2 setup/.test(e.detail))
+  fs.rmSync(node)
+  assert.throws(() => buildRouteEnv(loadRouteRecord(fx.H), host), (e) => e instanceof Refusal && /does not exist or is not executable/.test(e.message))
+})
+
+test('a recorded node whose sha256 differs from the pin is refused; a matching one is used', t => {
+  const fx = fixture(t)
+  const node = path.join(fx.nodeDir, 'node')
+  assert.equal(buildRouteEnv(loadRouteRecord(fx.H), { PATH: '/usr/bin' }).env.PATH.split(path.delimiter)[1], fx.nodeDir)
+  fs.writeFileSync(node, '#!/bin/sh\necho swapped\n', { mode: 0o755 })
+  assert.throws(() => buildRouteEnv(loadRouteRecord(fx.H), { PATH: '/usr/bin' }), (e) => e instanceof Refusal && /sha256 mismatch/.test(e.message))
 })
 
 test('core-run accepts only .py files inside the pinned core', t => {

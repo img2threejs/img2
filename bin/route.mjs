@@ -32,7 +32,13 @@ const STAMP = '.img2-route-python.json'
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'))
 const realOrNull = (p) => { try { return fs.realpathSync(p) } catch { return null } }
-const sha256File = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+const sha256File = (file) => {
+  const hash = crypto.createHash('sha256')
+  const buf = Buffer.allocUnsafe(1 << 20)
+  const fd = fs.openSync(file, 'r')
+  try { for (let n; (n = fs.readSync(fd, buf, 0, buf.length, null)) > 0;) hash.update(buf.subarray(0, n)) } finally { fs.closeSync(fd) }
+  return hash.digest('hex')
+}
 const isExecutable = (file) => {
   try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile() } catch { return false }
 }
@@ -81,8 +87,16 @@ export function findPillowEnv({ home, record }) {
   if (doc?.status !== 'ok' || doc.lockDigest !== record.lockDigest) {
     throw new Refusal(file + ' does not describe the runtime this setup record names (status ' + JSON.stringify(doc?.status) + ')', 'rerun `img2 setup`; nothing was run')
   }
-  const rtDir = path.join(rtRoot, record.lockDigest.slice(0, 12))
-  const realRt = realOrNull(rtDir)
+  // Same rule as the core selector reader (forge/_shared/runtime_selectors.py _runtime_path): the runtime tree is
+  // <canonical home>/runtime, and everything used from it must resolve strictly inside it, never to it, never out.
+  const realRt = realOrNull(rtRoot)
+  if (!realRt) throw new Refusal(rtRoot + ' does not exist', 'rerun `img2 setup`; nothing was run')
+  const rtDir = path.join(realRt, record.lockDigest.slice(0, 12))
+  const realDigest = realOrNull(rtDir)
+  if (realDigest !== rtDir) {
+    throw new Refusal(rtDir + ' is not a real directory inside ' + realRt + (realDigest ? ' (it resolves to ' + realDigest + ')' : ''),
+      'the runtime digest directory must not be a symlink or missing; rerun `img2 setup`; nothing was run')
+  }
   const baseBin = realOrNull(path.dirname(record.python.path))
   const checked = []
   for (const name of PILLOW_UNITS) {
@@ -97,7 +111,7 @@ export function findPillowEnv({ home, record }) {
     const libDir = path.join(venv, 'lib')
     const tag = (() => { try { return fs.readdirSync(libDir).find((n) => /^python\d+\.\d+$/.test(n)) } catch { return undefined } })()
     const site = tag && realOrNull(path.join(libDir, tag, 'site-packages'))
-    if (!site || !realRt || !isUnder(realRt, site) || !fs.statSync(path.join(site, 'PIL'), { throwIfNoEntry: false })?.isDirectory()) {
+    if (!site || !isUnder(realRt, site) || !isUnder(realDigest, site) || !fs.statSync(path.join(site, 'PIL'), { throwIfNoEntry: false })?.isDirectory()) {
       checked.push(name + ': no PIL under its site-packages'); continue
     }
     return { unit: name, site, tag, rtDir }
@@ -109,29 +123,58 @@ export function findPillowEnv({ home, record }) {
 // ---------------------------------------------------------------- the interpreter
 
 const CLEAN_PROBE_ENV = { PATH: SYSTEM_PATH.join(path.delimiter), LANG: 'C.UTF-8' }
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/
+
+// The Pillow site-packages is written verbatim into a .pth, where a line starting with `import` executes. Accept only
+// a single-line, canonical (realpath) absolute directory strictly inside <real runtime>/<digest>/.
+function validatePillowSite(home, record, pillow) {
+  const bad = (why) => new Refusal('the Pillow site-packages ' + JSON.stringify(pillow.site) + ' is refused: ' + why, 'rerun `img2 setup`; nothing was run')
+  const site = pillow.site
+  if (typeof site !== 'string' || !path.isAbsolute(site)) throw bad('not an absolute path')
+  if (CONTROL.test(site)) throw bad('it contains control characters')
+  if (/^(import|#)/.test(site.trim())) throw bad('it would be read as code or a comment')
+  if (typeof pillow.tag !== 'string' || !/^python\d+\.\d+$/.test(pillow.tag)) throw bad('the interpreter tag is not pythonX.Y')
+  const realRt = realOrNull(path.join(home, 'runtime'))
+  const digestDir = realRt && path.join(realRt, record.lockDigest.slice(0, 12))
+  if (!digestDir || realOrNull(digestDir) !== digestDir) throw bad('the runtime digest directory is not a real directory inside the runtime tree')
+  if (realOrNull(site) !== site || !isUnder(digestDir, site)) throw bad('it is not a canonical path inside ' + digestDir)
+  return site
+}
 
 // <runtime>/<digest>/route-python: a real (copied, not symlinked) CPython with a pyvenv.cfg on the managed base and a
 // .pth naming the verified env's site-packages. A copy because the core resolves symlinks before running the
 // preparation child; a .pth because that child runs with -I, which drops PYTHONPATH but still processes site dirs.
-// Rebuilt when the base interpreter or the Pillow env changes.
+// Rebuilt when the base interpreter or the Pillow env changes, and whenever the cached copy's pyvenv.cfg/.pth differ
+// from what is generated here (the cache lives in a user-writable home; a stamp alone proves nothing about contents).
 export function ensureRouteInterpreter({ home, record }, pillow, { probe = defaultProbe } = {}) {
   const dir = path.join(pillow.rtDir, 'route-python')
   const basePython = fs.realpathSync(record.python.path)
+  const version = record.python.version
+  if (typeof version !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
+    throw new Refusal('the recorded python version ' + JSON.stringify(version) + ' is not MAJOR.MINOR.PATCH', 'rerun `img2 setup`; nothing was run')
+  }
+  const baseHome = path.dirname(basePython)
+  if (CONTROL.test(baseHome)) throw new Refusal('the recorded interpreter directory contains control characters', 'rerun `img2 setup`; nothing was run')
+  const site = validatePillowSite(home, record, pillow)
+  const cfg = 'home = ' + baseHome + '\ninclude-system-site-packages = false\nversion = ' + version + '\n'
+  const pth = site + '\n'
+  const sitePath = (root) => path.join(root, 'lib', pillow.tag, 'site-packages', 'img2-route.pth')
   const baseStat = fs.statSync(basePython)
-  const stamp = JSON.stringify({ schema: 1, base: basePython, size: baseStat.size, mtimeMs: baseStat.mtimeMs, site: pillow.site, tag: pillow.tag })
+  const stamp = JSON.stringify({ schema: 1, base: basePython, size: baseStat.size, mtimeMs: baseStat.mtimeMs, site, tag: pillow.tag })
   const python = path.join(dir, 'bin', 'python3')
-  let current = null
-  try { current = fs.readFileSync(path.join(dir, STAMP), 'utf8') } catch { /* not built yet */ }
-  if (current !== stamp || !isExecutable(python)) {
+  const read = (file) => { try { return fs.readFileSync(file, 'utf8') } catch { return null } }
+  const fresh = read(path.join(dir, STAMP)) === stamp && isExecutable(python)
+    && read(path.join(dir, 'pyvenv.cfg')) === cfg && read(sitePath(dir)) === pth
+  if (!fresh) {
     const staging = dir + '.tmp-' + process.pid
     fs.rmSync(staging, { recursive: true, force: true })
-    const site = path.join(staging, 'lib', pillow.tag, 'site-packages')
     fs.mkdirSync(path.join(staging, 'bin'), { recursive: true, mode: 0o700 })
-    fs.mkdirSync(site, { recursive: true, mode: 0o700 })
+    fs.mkdirSync(path.dirname(sitePath(staging)), { recursive: true, mode: 0o700 })
     fs.copyFileSync(basePython, path.join(staging, 'bin', 'python3'))
     fs.chmodSync(path.join(staging, 'bin', 'python3'), 0o755)
-    fs.writeFileSync(path.join(staging, 'pyvenv.cfg'), 'home = ' + path.dirname(basePython) + '\ninclude-system-site-packages = false\nversion = ' + String(record.python.version) + '\n')
-    fs.writeFileSync(path.join(site, 'img2-route.pth'), pillow.site + '\n')
+    fs.writeFileSync(path.join(staging, 'pyvenv.cfg'), cfg)
+    fs.writeFileSync(sitePath(staging), pth)
     // Interpreters linked to a shared libpython (Linux builds) find it relative to the executable.
     const baseLib = path.join(path.dirname(path.dirname(basePython)), 'lib')
     try {
@@ -170,9 +213,20 @@ export function findOnPath(name, pathValue) {
 // the rest of the user's absolute PATH entries, system dirs. Nothing steers the interpreter: no PYTHONPATH/HOME-like
 // Python variables, pip/npm/UV settings, or node options are inherited.
 export function buildRouteEnv({ home, record }, host = process.env) {
-  const nodeDir = path.dirname(record.pins.node ?? '')
+  const node = record.pins.node
+  if (typeof node !== 'string' || !path.isAbsolute(node) || !isExecutable(node)) {
+    throw new Refusal('the node recorded by setup (' + JSON.stringify(node) + ') does not exist or is not executable',
+      'rerun `img2 setup` so the pin names an installed node; the ambient PATH node is never used instead; nothing was run')
+  }
+  const recordedSha = record.pins.nodeSha256
+  if (recordedSha !== undefined) {
+    if (!/^[0-9a-f]{64}$/.test(recordedSha)) throw new Refusal('the recorded node sha256 is malformed', 'rerun `img2 setup`; nothing was run')
+    if (sha256File(node) !== recordedSha) {
+      throw new Refusal('the node at ' + node + ' differs from the setup pin (sha256 mismatch)', 'rerun `img2 setup` so the pin matches the installed node; nothing was run')
+    }
+  }
   const blender = findOnPath('blender', host.PATH)
-  const dirs = [path.dirname(record.python.path), path.isAbsolute(nodeDir) && isExecutable(path.join(nodeDir, 'node')) ? nodeDir : null,
+  const dirs = [path.dirname(record.python.path), path.dirname(node),
     blender ? path.dirname(blender) : null, ...absoluteDirs(host.PATH), ...SYSTEM_PATH].filter(Boolean)
   const env = {}
   for (const key of PASS_ENV) if (host[key] !== undefined) env[key] = host[key]
