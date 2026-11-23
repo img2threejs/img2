@@ -112,6 +112,14 @@ test('pinned tool versions match the plugins\' own requirement files', () => {
   assert.equal(entry(lock, 'browser-chromium-1.64.0').environment, 'browsers')
 })
 
+test('Playwright MCP provisions only Chromium, not opt-in Firefox or WebKit', () => {
+  const browser = entry(deps(), 'browser-mcp-playwright')
+  for (const platform of browser.constraints.platforms) {
+    assert.deepEqual(browser.artifacts.filter(a => a.platform === platform).map(a => a.kind).sort(),
+      ['chromium', 'chromium-headless-shell'], platform)
+  }
+})
+
 test('npm entries carry sha512 integrity for every tarball', () => {
   for (const d of deps().dependencies.filter(d => d.kind === 'npm')) {
     for (const a of [...d.artifacts, ...(d.transitive ?? []).flatMap(t => t.artifacts)]) assert.match(a.integrity, /^sha512-[A-Za-z0-9+/]+={0,2}$/, d.id)

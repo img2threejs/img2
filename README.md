@@ -165,10 +165,14 @@ img2 provision --plan  # what would be downloaded; writes nothing
   and only when the wheel's SHA-256 equals the lock pin, the filename tag matches the platform, only
   the Python tag differs, and the `bpy` probes pass. Any other `pip check` line, package, hash or
   tag difference stays fatal. The waiver is recorded in `provision.json`.
-- **Skipping the Playwright MCP browsers:** the unit `browser-mcp-playwright` (Chromium, Firefox
-  and WebKit for `@playwright/mcp`) is large. `--skip browser-mcp-playwright` disables the whole
-  unit and everything requiring it, including `mcp-playwright`. Confirm IDs in
-  `dependencies.lock.json`.
+- **Playwright MCP browser:** `browser-mcp-playwright` installs only pinned Chromium and its headless
+  shell. `@playwright/mcp` 0.0.78 defaults to system Chrome; launch it with `--browser chromium`
+  (plus `--headless` for headless use) and `PLAYWRIGHT_BROWSERS_PATH` pointing to this unit's `browsers`
+  directory. Its probes use that same Chrome-for-Testing channel and require a real page load and WebGL
+  render. Firefox and WebKit are opt-in server modes, not dependencies of this runtime. Firefox rev 1534
+  times out on macOS arm64 with sandbox-extension denials and a SWGL framebuffer error; provisioning
+  does not disable its sandbox or substitute a different build. `--skip browser-mcp-playwright`
+  explicitly disables the whole unit and `mcp-playwright`.
 - **Private Jev clone fails:** obtain repository permission, configure Git authentication, then
   re-run `img2 setup`.
 

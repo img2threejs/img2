@@ -41,6 +41,10 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Fixed
 
+- Playwright MCP provisions only its pinned Chromium runtime, not opt-in Firefox/WebKit. Firefox rev
+  1534 cannot complete headless launch on the tested macOS arm64 host (sandbox-extension/SWGL errors).
+  MCP probes explicitly select `--browser chromium`; browser probes require a real page load as well
+  as the existing red WebGL render, using MCP's Chrome-for-Testing channel.
 - Provisioning retains previous units until the complete run succeeds and restores them after later
   failures. Interrupted runs restore parked previous units before resuming.
 - `pip check` stays fatal except one audited waiver: `bpy <version> is not supported on this platform` for a

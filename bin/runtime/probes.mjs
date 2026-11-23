@@ -291,12 +291,12 @@ async function launchProbe(pctx, { cwd, mod, browsers, types, depId, remedy }) {
   const out = []
   for (const type of types) {
     const isChromium = type === 'chromium'
+    const channel = depId === 'browser-mcp-playwright' && isChromium ? ', channel: "chrome-for-testing"' : ''
     const launch = isChromium
-      ? 'const b = await t.launch({ headless: true, args: ["--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] })'
+      ? 'const b = await t.launch({ headless: true' + channel + ', args: ["--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] })'
       : 'const b = await t.launch({ headless: true })'
     const body = isChromium
       ? [
-        '  const p = await b.newPage()',
         '  await p.setContent("<canvas id=c width=16 height=16></canvas>")',
         '  const r = await p.evaluate(() => {',
         '    const gl = c.getContext("webgl2") || c.getContext("webgl")',
@@ -312,16 +312,19 @@ async function launchProbe(pctx, { cwd, mod, browsers, types, depId, remedy }) {
       '  const pw = require(' + JSON.stringify(mod) + ')',
       '  const t = pw[' + JSON.stringify(type) + ']',
       '  ' + launch,
+      '  const p = await b.newPage()',
+      '  await p.goto("data:text/html,<title>img2-runtime-probe</title>")',
+      '  const title = await p.title()',
       ...body,
       '  const version = b.version()',
       '  await b.close()',
-      '  console.log(JSON.stringify({ version, ...r }))',
+      '  console.log(JSON.stringify({ version, title, ...r }))',
       '})().catch((e) => { console.error(String(e && e.stack || e).slice(0, 1500)); process.exit(1) })',
     ].join('\n')], { cwd, env: { PLAYWRIGHT_BROWSERS_PATH: browsers }, timeout: 120_000 })
-    const ok = !t.problem && (!isChromium || (!t.json.error && t.json.px?.[0] === 255 && t.json.px?.[1] === 0 && t.json.px?.[2] === 0))
+    const ok = !t.problem && t.json.title === 'img2-runtime-probe' && (!isChromium || (!t.json.error && t.json.px?.[0] === 255 && t.json.px?.[1] === 0 && t.json.px?.[2] === 0))
     out.push(check('chromium-webgl-capture', depId, ok,
-      type + ' launches headless' + (isChromium ? ' and renders a red WebGL clear' : ''),
-      t.problem ?? (t.json.error ?? type + ' ' + t.json.version + (t.json.gl ? ' / ' + t.json.gl + ' px ' + JSON.stringify(t.json.px) : '')),
+      type + ' launches headless and loads the probe page' + (isChromium ? ' and renders a red WebGL clear' : ''),
+      t.problem ?? (t.json.error ?? type + ' ' + t.json.version + ' / title ' + JSON.stringify(t.json.title) + (t.json.gl ? ' / ' + t.json.gl + ' px ' + JSON.stringify(t.json.px) : '')),
       { path: browsers, stderr: t.stderr, remedy: remedy ?? (process.platform === 'linux' ? 'install the browser system libraries (npx playwright install-deps) then rerun img2 doctor --runtime' : 'img2 provision') }))
   }
   return out
@@ -361,7 +364,9 @@ const MCP = async (pctx, deps) => {
       continue
     }
     const browserId = d.entry.requires.find((x) => x.startsWith('browser-'))
-    const r = await pctx.mcp({ command: nodeBin(pctx), args: [bin], cwd: root, env: cleanEnv(browserId ? { PLAYWRIGHT_BROWSERS_PATH: pctx.browsersFor(browserId) } : {}), timeout: 60_000 })
+    // This pin defaults to system Chrome, not the downloaded Chromium bundle.
+    const args = d.id === 'mcp-playwright' ? [bin, '--browser', 'chromium', '--headless', '--isolated'] : [bin]
+    const r = await pctx.mcp({ command: nodeBin(pctx), args, cwd: root, env: cleanEnv(browserId ? { PLAYWRIGHT_BROWSERS_PATH: pctx.browsersFor(browserId) } : {}), timeout: 60_000 })
     out.push(check('mcp-initialize-tools-list', d.id, r.ok, d.entry.name + ' answers initialize (and tools/list)',
       r.ok ? (r.serverInfo?.name ?? '?') + ' ' + (r.serverInfo?.version ?? '') + (r.toolCount !== null ? ', ' + r.toolCount + ' tools' : '') : r.error,
       { path: bin, stderr: tail(r.stderr), remedy: 'img2 provision' }))

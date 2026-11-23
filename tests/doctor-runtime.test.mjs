@@ -99,6 +99,20 @@ test('a wrong installed version, a missing WebGL context and a silent MCP server
   assert.match(mcp.text, /FAIL +mcp-initialize-tools-list[\s\S]*no reply within 60000 ms/)
 })
 
+test('a launched browser that did not load the probe page fails runtime doctor', async () => {
+  const { fx, deps } = await provisioned()
+  const run = stubRunner()
+  const r = await doctor(fx, deps, { run: async (file, args, opts) => {
+    const result = await run(file, args, opts)
+    if (args.at(-1)?.includes?.('t.launch') && result.code === 0) {
+      result.stdout = JSON.stringify({ ...JSON.parse(result.stdout), title: 'wrong page' })
+    }
+    return result
+  } })
+  assert.equal(r.code, EXIT.FAIL)
+  assert.match(r.text, /FAIL +chromium-webgl-capture[\s\S]*wrong page/)
+})
+
 test('a unit missing from disk fails with where it should have been; skipped dependencies are listed, not failed', async () => {
   const fx = makeFixture(); const deps = makeDeps(fx)
   await runProvision(baseOpts({ skip: ['mcp-fake'] }), deps.home, deps)

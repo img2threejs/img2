@@ -232,7 +232,7 @@ export function stubRunner({ failOn = [], failProbe = [], webgl = true } = {}) {
       if (code.includes('executablePath')) return json({ chromium: path.join(opts.env.PLAYWRIGHT_BROWSERS_PATH, 'chromium-1', 'chrome-linux', 'chrome') })
       if (code.includes('t.launch')) {
         if (!fs.existsSync(path.join(opts.env.PLAYWRIGHT_BROWSERS_PATH ?? '/nonexistent', 'chromium-1'))) return bad('browserType.launch: Executable does not exist')
-        return json(webgl ? { version: '156.0', gl: 'WebGL 2.0', px: [255, 0, 0, 255] } : { version: '156.0', error: 'no WebGL context' })
+        return json(webgl ? { version: '156.0', title: 'img2-runtime-probe', gl: 'WebGL 2.0', px: [255, 0, 0, 255] } : { version: '156.0', title: 'img2-runtime-probe', error: 'no WebGL context' })
       }
       if (code.includes('REVISION')) {
         const v = JSON.parse(fs.readFileSync(path.join(opts.cwd, 'node_modules', 'three', 'package.json'), 'utf8')).version

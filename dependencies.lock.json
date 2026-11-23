@@ -8714,8 +8714,8 @@
       "id": "browser-mcp-playwright",
       "environment": "browsers",
       "kind": "browser",
-      "name": "Chromium, Firefox, WebKit for @playwright/mcp 0.0.78",
-      "version": "playwright 1.62.0-alpha-1783623505000: chromium 151.0.7922.10 (rev 1232), firefox 152.0.4 (rev 1534), webkit 26.5 (rev 2327)",
+      "name": "Chromium for @playwright/mcp 0.0.78",
+      "version": "playwright 1.62.0-alpha-1783623505000: chromium 151.0.7922.10 (rev 1232)",
       "group": "mcp",
       "consumers": [
         "mcp",
@@ -8783,76 +8783,13 @@
           "platform": "linux-x64",
           "filename": "chrome-headless-shell-linux64.zip",
           "kind": "chromium-headless-shell"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/firefox/1534/firefox-mac-arm64.zip",
-          "size": 104844321,
-          "platform": "darwin-arm64",
-          "filename": "firefox-mac-arm64.zip",
-          "kind": "firefox",
-          "minOs": "macOS>=15"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/firefox/1534/firefox-mac.zip",
-          "size": 112565578,
-          "platform": "darwin-x64",
-          "filename": "firefox-mac.zip",
-          "kind": "firefox",
-          "minOs": "macOS>=15"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/firefox/1534/firefox-ubuntu-24.04.zip",
-          "size": 111590151,
-          "platform": "linux-x64",
-          "filename": "firefox-ubuntu-24.04.zip",
-          "kind": "firefox",
-          "minOs": "ubuntu>=24.04"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/firefox/1534/firefox-ubuntu-24.04-arm64.zip",
-          "size": 102329818,
-          "platform": "linux-arm64",
-          "filename": "firefox-ubuntu-24.04-arm64.zip",
-          "kind": "firefox",
-          "minOs": "ubuntu>=24.04"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/webkit/2327/webkit-mac-15-arm64.zip",
-          "size": 80402254,
-          "platform": "darwin-arm64",
-          "filename": "webkit-mac-15-arm64.zip",
-          "kind": "webkit",
-          "minOs": "macOS>=15"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/webkit/2327/webkit-mac-15.zip",
-          "size": 86547090,
-          "platform": "darwin-x64",
-          "filename": "webkit-mac-15.zip",
-          "kind": "webkit",
-          "minOs": "macOS>=15"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/webkit/2327/webkit-ubuntu-24.04.zip",
-          "size": 106600540,
-          "platform": "linux-x64",
-          "filename": "webkit-ubuntu-24.04.zip",
-          "kind": "webkit",
-          "minOs": "ubuntu>=24.04"
-        },
-        {
-          "url": "https://cdn.playwright.dev/builds/webkit/2327/webkit-ubuntu-24.04-arm64.zip",
-          "size": 100205198,
-          "platform": "linux-arm64",
-          "filename": "webkit-ubuntu-24.04-arm64.zip",
-          "kind": "webkit",
-          "minOs": "ubuntu>=24.04"
         }
       ],
       "unavailable": {
         "linux-arm64:chromium": "not found on cdn.playwright.dev",
         "linux-arm64:chromium-headless-shell": "not found on cdn.playwright.dev"
       },
+      "notes": "@playwright/mcp 0.0.78 defaults to system Chrome; use --browser chromium to select this pinned Chrome-for-Testing bundle. Firefox and WebKit are opt-in, not MCP requirements. Firefox rev 1534 times out on macOS arm64 with sandbox-extension denials and a SWGL framebuffer error; do not require it for the Chromium runtime.",
       "probe": "mcp-playwright-browsers",
       "ownership": "harness",
       "status": "unresolved",
