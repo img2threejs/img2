@@ -33,6 +33,20 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   runs, the vision stack infers and each MCP server answers `initialize`; skipped, Jev-login and CS2-VPK
   conditions are reported apart from failures.
 
+### Fixed
+
+- Provisioning retains previous units until the complete run succeeds and restores them after later
+  failures. Interrupted runs restore parked previous units before resuming.
+- Keep `pip check` failures fatal, including the upstream macOS arm64 bpy 4.5.15 wheel's inconsistent
+  `cp39` metadata tags despite its `cp311` filename; that artifact requires corrected upstream bytes
+  and lock integrity pins rather than a provisioner platform-check waiver.
+- Vision probes check actual pinned distributions in closure-only lock entries rather than treating
+  the entry's descriptive name as an installed package.
+- Refuse hardlink sources with symlinked ancestors and revalidate sources after extraction; recheck
+  cache hits against current size and Git blob pins; reject stale plugin-lock selector digests.
+- Timeout handling kills subprocess groups and bounds pipe waits. MCP probes require a successful
+  `tools/list` response, not just successful initialization.
+
 ### Changed
 
 - Official catalog now lists exactly the approved plugins: `character`, `cs2`, `interior`, `jev` and

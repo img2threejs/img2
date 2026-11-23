@@ -51,7 +51,7 @@ export async function runDoctorRuntime({ home, json = false, deps }) {
     add(row('fail', 'harness', 'harness', 'a supported platform and valid lock files', e.message, { stderr: e.detail }))
     return finish(results, json, out, null)
   }
-  const { lock, lockDigest, plugins } = locked
+  const { lock, lockDigest, plugins, pluginsDigest } = locked
   const summary = readJson(path.join(runtimeRoot, 'provision.json'))
   const selectors = readJson(selectorsPath(runtimeRoot))
   if (!selectors || !summary || summary.status !== 'ok') {
@@ -60,8 +60,8 @@ export async function runDoctorRuntime({ home, json = false, deps }) {
       { remedy: 'img2 provision' }))
     return finish(results, json, out, null)
   }
-  const problems = validateSelectorsFile(runtimeRoot, { lockDigest })
-  add(row(problems.length ? 'fail' : 'pass', 'selectors', 'harness', 'selectors.json valid (mode 600, paths inside the runtime tree, matching lock digest)', problems.length ? problems.join('; ') : 'valid', { path: selectorsPath(runtimeRoot), remedy: problems.length ? 'img2 provision' : undefined }))
+  const problems = validateSelectorsFile(runtimeRoot, { lockDigest, pluginsLockDigest: pluginsDigest })
+  add(row(problems.length ? 'fail' : 'pass', 'selectors', 'harness', 'selectors.json valid (mode 600, paths inside the runtime tree, matching lock and plugins-lock digests)', problems.length ? problems.join('; ') : 'valid', { path: selectorsPath(runtimeRoot), remedy: problems.length ? 'img2 provision' : undefined }))
 
   let selection
   try {

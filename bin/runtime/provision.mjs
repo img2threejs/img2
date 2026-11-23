@@ -131,20 +131,54 @@ function retargetVenv(stage, finalDir) {
   }
 }
 
-function activate(stage, finalDir) {
+// Units are switched in as they pass (later units probe against earlier ones), but the directory each switch
+// replaces is parked under .rollback/ until the WHOLE run has succeeded. Any failure puts every parked unit back.
+const rollbackDir = (rtDir) => path.join(rtDir, '.rollback')
+const parkedName = (name) => encodeURIComponent(name)
+
+function activate(stage, finalDir, parkedAs) {
   ensureDir(path.dirname(finalDir))
-  let trash = null
+  let parked = null
   if (fs.existsSync(finalDir)) {
-    trash = finalDir + '.old-' + process.pid
-    fs.renameSync(finalDir, trash)
+    ensureDir(path.dirname(parkedAs))
+    rmrf(parkedAs)
+    fs.renameSync(finalDir, parkedAs)
+    parked = parkedAs
   }
   try {
     fs.renameSync(stage, finalDir)
   } catch (e) {
-    if (trash) fs.renameSync(trash, finalDir)
+    if (parked) fs.renameSync(parked, finalDir)
     throw e
   }
-  if (trash) rmrf(trash)
+  return parked
+}
+
+// Restores every parked unit (newest first). Returns the unit names that could not be restored.
+function rollBack(rtDir, activated, out) {
+  const failed = []
+  for (const a of [...activated].reverse()) {
+    try {
+      rmrf(a.finalDir)
+      if (a.parked) fs.renameSync(a.parked, a.finalDir)
+    } catch (e) { failed.push(a.name + ' (' + e.message + ')') }
+  }
+  if (!failed.length) rmrf(rollbackDir(rtDir))
+  else out('rollback incomplete; previous units are parked in ' + rollbackDir(rtDir) + ': ' + failed.join('; '))
+  return failed
+}
+
+// A crashed run can leave parked units behind: put them back before doing anything else.
+function recoverParked(rtDir) {
+  const dir = rollbackDir(rtDir)
+  if (!fs.existsSync(dir)) return
+  for (const n of fs.readdirSync(dir)) {
+    const finalDir = safeUnitDir(rtDir, decodeURIComponent(n))
+    rmrf(finalDir)
+    ensureDir(path.dirname(finalDir))
+    fs.renameSync(path.join(dir, n), finalDir)
+  }
+  rmrf(dir)
 }
 
 const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return null } }
@@ -232,8 +266,11 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
   const started = deps.now()
   const summary = { schema: PROVISION_SCHEMA, status: 'running', startedAt: started.toISOString(), platform, profile: o.profile, selectedPlugins: selection.selectedPlugins, lockDigest, pluginsLockDigest: pluginsDigest, offline: o.offline, allowWeakHash: o.allowWeakHash, skipRequested: o.skip, skipped: selection.skipped.map((d) => ({ id: d.id, reason: d.reason })), units: [], steps: receipts }
   let failure = null
+  const activated = []
+  let rollbackFailed = []
   try {
     ensureDir(rtDir)
+    recoverParked(rtDir)
     const ctx = makeCtx({ deps, rtDir, cacheDir: path.join(runtimeRoot, 'cache'), platform, lock, offline: o.offline, allowWeak: o.allowWeakHash, receipts })
     ensureDir(ctx.tmpDir)
     const units = buildUnits(selection, lock)
@@ -273,7 +310,8 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
         const declared = declaredExports(unit)
         const kept = Object.fromEntries(Object.entries(exports).filter(([k]) => declared.has(k)))
         atomicWriteJson(path.join(stage, '.img2-unit.json'), { schema: PROVISION_SCHEMA, fingerprint, dependencies: row.dependencies, exports: kept, builtAt: deps.now().toISOString() }, 0o644)
-        activate(stage, finalDir)
+        const parked = activate(stage, finalDir, path.join(rollbackDir(rtDir), parkedName(unit.name)))
+        activated.push({ name: unit.name, finalDir, parked })
         retargetVenv(stage, finalDir)
         row.exports = kept
         Object.assign(exportsAll, absExports(finalDir, kept, unit))
@@ -302,13 +340,16 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
     const extra = {}
     for (const k of ['IMG2_PYTHON', 'SOURCE2VIEWER_CLI', 'DOTNET_ROOT']) if (exportsAll[k] !== undefined) extra[k] = exportsAll[k]
     writeEnvSh(runtimeRoot, selectors, extra)
+    rmrf(rollbackDir(rtDir)) // every unit and the selectors are in place: the previous units can go
     summary.status = 'ok'
     summary.selectors = selectorsPath(runtimeRoot)
     out('selectors written: ' + selectorsPath(runtimeRoot))
     out('env script       : ' + envShPath(runtimeRoot))
   } catch (e) {
     failure = e
+    rollbackFailed = rollBack(rtDir, activated, out)
     summary.status = 'failed'
+    summary.rolledBack = activated.map((a) => a.name)
     summary.error = { message: e.message, detail: e.detail }
   } finally {
     summary.finishedAt = deps.now().toISOString()
@@ -319,7 +360,9 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
     if (failure instanceof Refusal) throw failure
     ;(deps.err ?? out)('img2 provision failed: ' + failure.message)
     if (failure.detail) for (const l of String(failure.detail).split('\n')) (deps.err ?? out)('    ' + l)
-    ;(deps.err ?? out)('the previous runtime is untouched; rerun `img2 provision` to resume from the verified cache (receipt: ' + path.join(runtimeRoot, 'provision.json') + ')')
+    ;(deps.err ?? out)(rollbackFailed.length
+      ? 'rollback FAILED for ' + rollbackFailed.join('; ') + '; the next `img2 provision` restores the parked units first (receipt: ' + path.join(runtimeRoot, 'provision.json') + ')'
+      : 'every unit this run switched in was rolled back; the previous runtime is as it was. Rerun `img2 provision` to resume from the verified cache (receipt: ' + path.join(runtimeRoot, 'provision.json') + ')')
     return EXIT.FAIL
   }
   return EXIT.OK

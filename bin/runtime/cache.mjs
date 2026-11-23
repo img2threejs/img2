@@ -75,16 +75,27 @@ export class Cache {
   // True when fetch() could be satisfied without the network (existence only; fetch re-verifies the bytes).
   has(artifact) {
     const integ = integrityOf(artifact)
-    if (!integ.weak) return fs.existsSync(this.entry(integ.algo, integ.hex))
+    const sized = (file) => {
+      try {
+        const st = fs.statSync(file)
+        return st.isFile() && (!Number.isFinite(artifact.size) || st.size === artifact.size)
+      } catch { return false }
+    }
+    if (!integ.weak) return sized(this.entry(integ.algo, integ.hex))
     const known = this.readIndex()[artifact.url]
-    return !!known && fs.existsSync(this.entry('sha256', known.sha256))
+    return !!known && sized(this.entry('sha256', known.sha256))
   }
 
-  async fresh(file, algo, hex) {
+  // A cached entry is reused only if its bytes satisfy EVERY pin of the current artifact: the content hash,
+  // the declared size and (weak entries) the git blob SHA-1. A pin changed since the entry was stored
+  // makes it stale, whatever the index says.
+  async fresh(file, algo, hex, artifact = {}) {
     if (!fs.existsSync(file)) return null
     const h = await hashFile(file, [...new Set(['sha256', algo])])
-    if (h[algo] === hex) return h
-    rmrf(file) // corrupt or tampered entry: never reused
+    const sizeOk = !Number.isFinite(artifact.size) || artifact.size === h.size
+    const blobOk = !artifact.gitBlobSha1 || gitBlobSha1(file) === artifact.gitBlobSha1
+    if (h[algo] === hex && sizeOk && blobOk) return h
+    rmrf(file) // corrupt, tampered or no longer matching the pins: never reused
     return null
   }
 
@@ -101,7 +112,7 @@ export class Cache {
 
   async fetchStrong(artifact, label, integ) {
     const dest = this.entry(integ.algo, integ.hex)
-    const hit = await this.fresh(dest, integ.algo, integ.hex)
+    const hit = await this.fresh(dest, integ.algo, integ.hex, artifact)
     if (hit) return { file: dest, algo: integ.algo, sha256: hit.sha256, size: hit.size, cached: true, weak: null }
     if (this.offline) throw new StepError('--offline: ' + label + ' is not in the cache', integ.algo + ':' + integ.hex)
     const tmp = await this.fetchTmp(artifact, label)
@@ -121,7 +132,7 @@ export class Cache {
     const known = index[artifact.url]
     if (known) {
       const dest = this.entry('sha256', known.sha256)
-      const hit = await this.fresh(dest, 'sha256', known.sha256)
+      const hit = await this.fresh(dest, 'sha256', known.sha256, artifact)
       if (hit) return { file: dest, algo: 'sha256', sha256: known.sha256, size: hit.size, cached: true, weak: integ.kind }
     }
     if (this.offline) throw new StepError('--offline: ' + label + ' is not in the cache', integ.kind)

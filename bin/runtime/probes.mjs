@@ -5,6 +5,7 @@ import path from 'node:path'
 import { cleanEnv, mcpHandshake } from './exec.mjs'
 import { atomicWriteFile, rmrf } from './fsx.mjs'
 import crypto from 'node:crypto'
+import { artifactsOf } from './lock.mjs'
 
 export const venvPython = (unitDir) => path.join(unitDir, 'venv', 'bin', 'python')
 export const nodeRootOf = (unitDir) => path.join(unitDir, 'node')
@@ -113,7 +114,15 @@ const BPY = async (pctx, deps) => {
 }
 
 const VISION = async (pctx, deps) => {
-  const names = new Set(deps.filter((d) => d.entry.kind === 'pip').map((d) => d.entry.name))
+  // Closure-only entries have a descriptive name, not an importable distribution. Probe their pinned
+  // transitive wheels instead, as well as every real top-level pip distribution.
+  const pins = new Map()
+  for (const d of deps.filter((d) => d.entry.kind === 'pip')) {
+    for (const p of artifactsOf(d.entry, pctx.selection.platform)) {
+      if (!p.skipped) pins.set(p.name, p.version)
+    }
+  }
+  const names = pins.keys()
   const hf = path.join(pctx.unitDir, 'huggingface')
   const code = [
     'import json, os, importlib.metadata as m',
@@ -145,7 +154,7 @@ const VISION = async (pctx, deps) => {
   ].join('\n')
   const env = { HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HOME: hf, MPLCONFIGDIR: path.join(pctx.tmpDir, 'mpl') }
   const t = await py(pctx, pctx.unitDir, code, { timeout: 300_000, env })
-  const missing = t.json ? deps.filter((d) => d.entry.kind === 'pip' && t.json[d.entry.name] !== d.entry.version).map((d) => d.entry.name) : []
+  const missing = t.json ? [...pins].filter(([name, version]) => t.json[name] !== version).map(([name]) => name) : []
   const ok = !t.problem && missing.length === 0
   const wantsDepth = deps.some((d) => d.id === 'vision-model-depth-anything-weights')
   const depthOk = !wantsDepth || (t.json && Array.isArray(t.json.depthOutput))

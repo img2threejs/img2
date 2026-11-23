@@ -1,4 +1,5 @@
 import test from 'node:test'
+import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -185,7 +186,6 @@ test('weak-hash artifacts are refused with exit 2 unless --allow-weak-hash, whic
   assert.ok(receipt.steps.some((s) => s.kind === 'browser-tree' && /^[0-9a-f]{64}$/.test(s.treeSha256)), 'browser tree sha256 recorded')
 })
 
-import crypto from 'node:crypto'
 function require_sha1(head, body) { return crypto.createHash('sha1').update(head).update(body).digest('hex') }
 
 test('a git blob that does not match its pinned SHA-1 is refused even with --allow-weak-hash', async () => {
@@ -476,4 +476,121 @@ test('--skip python-runtime does not cascade: a matching system interpreter stan
   assert.match(text, /python-runtime: skipped by --skip python-runtime/)
   assert.doesNotMatch(text, /character-bpy: requires/)
   assert.match(text, /\ncharacter /)
+})
+
+// ---------------------------------------------------------------- runtime exec hardening
+
+import { realRunner, mcpHandshake } from '../bin/runtime/exec.mjs'
+
+test('realRunner: a timeout kills the whole process group and returns without waiting on pipes a grandchild holds', async () => {
+  const run = realRunner()
+  const t0 = Date.now()
+  const r = await run('/bin/sh', ['-c', 'sleep 30 & echo $! ; wait'], { timeout: 300, killGraceMs: 100 })
+  assert.equal(r.timedOut, true)
+  assert.ok(Date.now() - t0 < 5000, 'returned promptly after the kill, not after the grandchild closed the pipes')
+  const grandchild = Number(r.stdout.trim().split('\n')[0])
+  assert.ok(grandchild > 0)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.throws(() => process.kill(grandchild, 0), /ESRCH/, 'grandchild is gone')
+})
+
+test('mcpHandshake: a JSON-RPC error from tools/list fails the handshake', async () => {
+  const server = [
+    "process.stdin.setEncoding('utf8'); let b = ''",
+    "process.stdin.on('data', (c) => { b += c; let i; while ((i = b.indexOf('\\n')) >= 0) { const m = JSON.parse(b.slice(0, i)); b = b.slice(i + 1)",
+    "  if (m.id === 1) console.log(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { serverInfo: { name: 's', version: '1' } } }))",
+    "  if (m.id === 2) console.log(JSON.stringify({ jsonrpc: '2.0', id: 2, error: { code: -32601, message: 'Method not found' } })) } })",
+  ].join('\n')
+  const r = await mcpHandshake({ command: process.execPath, args: ['-e', server], timeout: 10_000 })
+  assert.equal(r.ok, false)
+  assert.match(r.error, /tools\/list failed.*Method not found/)
+  const good = await mcpHandshake({ command: process.execPath, args: ['-e', server.replace("error: { code: -32601, message: 'Method not found' }", "result: { tools: [{}, {}] }")], timeout: 10_000 })
+  assert.equal(good.ok, true); assert.equal(good.toolCount, 2)
+  const malformed = await mcpHandshake({ command: process.execPath, args: ['-e', server.replace("error: { code: -32601, message: 'Method not found' }", "result: {}")], timeout: 10_000 })
+  assert.equal(malformed.ok, false); assert.match(malformed.error, /no tools array/)
+  const silent = await mcpHandshake({ command: process.execPath, args: ['-e', server.replace("if (m.id === 2)", "if (false)")], timeout: 500 })
+  assert.equal(silent.ok, false); assert.match(silent.error, /no reply/)
+})
+
+// ---------------------------------------------------------------- cache pins
+
+import { Cache } from '../bin/runtime/cache.mjs'
+
+test('cache: bytes stored under an old pin are not reused once the artifact pins (git blob SHA-1, size) change', async () => {
+  const url = 'https://artifacts.example.test/cfg.json'
+  const old = Buffer.from('old config'); const next = Buffer.from('new config!')
+  const gitSha = (b) => crypto.createHash('sha1').update('blob ' + b.length + '\0').update(b).digest('hex')
+  const served = { current: old }
+  const download = async (u, dest) => { download.calls += 1; fs.writeFileSync(dest, served.current) }
+  download.calls = 0
+  const cache = new Cache({ dir: tmp(), download, allowWeak: true })
+  const first = await cache.fetch({ url, size: old.length, gitBlobSha1: gitSha(old) }, 'cfg')
+  assert.equal(first.cached, false)
+  assert.equal((await cache.fetch({ url, size: old.length, gitBlobSha1: gitSha(old) }, 'cfg')).cached, true, 'same pins hit the cache')
+  assert.equal(download.calls, 1)
+  served.current = next
+  const bumped = await cache.fetch({ url, size: next.length, gitBlobSha1: gitSha(next) }, 'cfg')
+  assert.equal(bumped.cached, false, 'a changed pin forces a re-download')
+  assert.equal(fs.readFileSync(bumped.file, 'utf8'), 'new config!')
+  assert.equal(download.calls, 2)
+  // same bytes, pins that no longer match them: refused after the re-download, never served from cache
+  await assert.rejects(() => cache.fetch({ url, size: next.length, gitBlobSha1: gitSha(old) }, 'cfg'), /git blob SHA-1 mismatch/)
+})
+
+// ---------------------------------------------------------------- transactional activation
+
+test('a failing later unit rolls back units this run already switched in, and the message is true', async () => {
+  const fx = makeFixture(); const first = makeDeps(fx)
+  assert.equal(await runProvision(baseOpts(), first.home, first), EXIT.OK)
+  const dir = digestDir(first, fx)
+  const before = snapshot(path.join(dir, 'character')); const beforeSel = fs.readFileSync(path.join(rt(first), 'selectors.json'), 'utf8')
+  assert.equal(readJson(path.join(dir, 'character', 'venv', 'installed.json')).bpy, '4.5.15')
+  // --skip character-bpy changes the character unit's fingerprint (rebuilt, switched in), then vision fails its probe
+  const second = makeDeps(fx, { home: first.home, run: stubRunner({ failProbe: ['import torch'] }) })
+  assert.equal(await runProvision(baseOpts({ skip: ['character-bpy'] }), second.home, second), EXIT.FAIL)
+  assert.deepEqual(snapshot(path.join(dir, 'character')), before, 'the previous character environment is back, byte for byte')
+  assert.equal(fs.readFileSync(path.join(rt(first), 'selectors.json'), 'utf8'), beforeSel)
+  assert.equal(fs.existsSync(path.join(dir, '.rollback')), false)
+  assert.match(second.errs.join('\n'), /rolled back/)
+  assert.doesNotMatch(second.errs.join('\n'), /untouched/)
+  assert.ok(readJson(path.join(rt(first), 'provision.json')).rolledBack.includes('character'))
+  // and the runtime still works: a clean rerun succeeds
+  assert.equal(await runProvision(baseOpts(), first.home, makeDeps(fx, { home: first.home })), EXIT.OK)
+})
+
+// ---------------------------------------------------------------- pip check and stale WHEEL tags
+
+test('pip check remains fail-closed for unsupported wheels and missing or conflicting requirements', async () => {
+  const fx = makeFixture()
+  for (const stdout of [
+    'bpy 4.5.15 is not supported on this platform\n',
+    'bpy 4.5.15 requires cython, which is not installed.\n',
+    'bpy 4.5.15 has requirement numpy<2.0,>=1.26, but you have numpy 2.0.0.\n',
+  ]) {
+    const inner = stubRunner()
+    const run = (file, args, opts) => args.includes('pip') && args.includes('check')
+      ? { code: 1, signal: null, stdout, stderr: '', timedOut: false, error: null }
+      : inner(file, args, opts)
+    const deps = makeDeps(fx, { run })
+    assert.equal(await runProvision(baseOpts(), deps.home, deps), EXIT.FAIL)
+    assert.match(deps.errs.join('\n'), /pip check failed/)
+    assert.ok(deps.errs.join('\n').includes(stdout.trim()))
+  }
+})
+
+test('vision probes pinned distributions inside a closure-only lock entry, not its descriptive name', async () => {
+  const fx = makeFixture({ mutate: (lock) => {
+    const torch = lock.dependencies.find((d) => d.id === 'vision-torch')
+    const certifi = structuredClone(lock.dependencies.find((d) => d.id === 'character-bpy').transitive[0])
+    torch.transitive = [certifi]
+    const otherPlatform = structuredClone(certifi)
+    otherPlatform.name = 'cuda-bindings'
+    otherPlatform.artifacts = otherPlatform.artifacts.map((a) => ({ ...a, platform: 'darwin-arm64' }))
+    torch.transitive.push(otherPlatform)
+    lock.dependencies.push({ ...structuredClone(torch), id: 'vision-transitive', name: 'vision transitive closure (uv.lock)',
+      version: 'uv.lock@abc', artifacts: [], transitive: [certifi], exports: [] })
+    lock.profiles.full.dependencies.push('vision-transitive')
+  } })
+  const deps = makeDeps(fx)
+  assert.equal(await runProvision(baseOpts(), deps.home, deps), EXIT.OK, deps.errs.join('\n'))
 })

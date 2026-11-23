@@ -63,7 +63,7 @@ export function writeEnvSh(runtimeRoot, selectors, extra = {}) {
 }
 
 // Re-validates a written selectors.json the way the core will read it. Returns a list of problems.
-export function validateSelectorsFile(runtimeRoot, { lockDigest } = {}) {
+export function validateSelectorsFile(runtimeRoot, { lockDigest, pluginsLockDigest } = {}) {
   const file = selectorsPath(runtimeRoot)
   const problems = []
   let st
@@ -75,6 +75,7 @@ export function validateSelectorsFile(runtimeRoot, { lockDigest } = {}) {
   try { doc = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { return [...problems, 'selectors.json is not valid JSON: ' + e.message] }
   if (doc.schema !== 1) problems.push('schema must be 1')
   if (lockDigest && doc.lockDigest !== lockDigest) problems.push('lockDigest ' + String(doc.lockDigest).slice(0, 12) + ' differs from the installed harness lock ' + lockDigest.slice(0, 12))
+  if (pluginsLockDigest && doc.pluginsLockDigest !== pluginsLockDigest) problems.push('pluginsLockDigest ' + String(doc.pluginsLockDigest).slice(0, 12) + ' differs from the installed harness plugins lock ' + pluginsLockDigest.slice(0, 12))
   if (!Array.isArray(doc.selectedPlugins)) problems.push('selectedPlugins must be an array')
   if (typeof doc.env !== 'object' || doc.env === null) return [...problems, 'env must be an object']
   for (const [k, v] of Object.entries(doc.env)) {

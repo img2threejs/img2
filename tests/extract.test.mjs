@@ -68,6 +68,26 @@ test('tar: a hardlink may only point at an extracted regular file inside the tre
   await reject(() => extractTarGz(write(d, 'evil.tgz', makeTarGz([{ name: 'b', type: 'hardlink', link: '/etc/passwd' }])), path.join(d, 'o2')), /absolute|missing/)
 })
 
+test('tar: a hardlink source behind symlinked ancestors never reads outside the destination', async () => {
+  const d = tmp()
+  fs.writeFileSync(path.join(d, 'secret'), 'TOP SECRET')
+  const f = write(d, 'h.tgz', makeTarGz([
+    { name: 'out/sub/up', type: 'symlink', link: '..' },
+    { name: 'out/escape', type: 'symlink', link: 'sub/up/..' },
+    { name: 'out/stolen', type: 'hardlink', link: 'out/escape/secret' },
+    { name: 'out/escape', data: 'replace the escape symlink before finish()' },
+  ]))
+  await reject(() => extractTarGz(f, path.join(d, 'out'), { strip: 1 }), /symlink|outside/)
+  assert.equal(fs.existsSync(path.join(d, 'out', 'stolen')), false)
+  const direct = write(d, 'h2.tgz', makeTarGz([{ name: 'real', data: 'x' }, { name: 'ln', type: 'symlink', link: 'real' }, { name: 'h', type: 'hardlink', link: 'ln' }]))
+  await reject(() => extractTarGz(direct, path.join(d, 'o2')), /symlink/)
+  const changedSource = write(d, 'h3.tgz', makeTarGz([
+    { name: 'src', data: 'safe' }, { name: 'h', type: 'hardlink', link: 'src' },
+    { name: 'src', type: 'symlink', link: 'h' },
+  ]))
+  await reject(() => extractTarGz(changedSource, path.join(d, 'o3')), /symlink/)
+})
+
 test('zip: extracts files and relative symlinks, refuses traversal, absolute names and symlink escapes', async () => {
   const d = tmp(); const out = path.join(d, 'out')
   extractZip(write(d, 'ok.zip', makeZip([{ name: 'cli', data: '#!x', mode: 0o755 }, { name: 'sub/', data: '' }, { name: 'sub/l', symlink: '../cli' }])), out)

@@ -123,6 +123,16 @@ test('doctor --runtime without a provision, or against a different lock, fails r
   assert.match(stale.text, /differs from the installed harness lock/)
 })
 
+test('doctor rejects selectors whose pluginsLockDigest is stale, as the core reader does', async () => {
+  const { fx, deps } = await provisioned()
+  const file = path.join(deps.home, 'runtime', 'selectors.json')
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
+  fs.writeFileSync(file, JSON.stringify({ ...doc, pluginsLockDigest: 'f'.repeat(64) })); fs.chmodSync(file, 0o600)
+  const r = await doctor(fx, deps)
+  assert.equal(r.code, EXIT.FAIL)
+  assert.match(r.text, /FAIL +selectors[\s\S]*pluginsLockDigest/)
+})
+
 test('a tampered selectors.json (escaping path, loose mode) fails the selectors check', async () => {
   const { fx, deps } = await provisioned()
   const file = path.join(deps.home, 'runtime', 'selectors.json')

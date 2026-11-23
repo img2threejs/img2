@@ -27,6 +27,7 @@ export class SafeWriter {
     this.bytes = 0
     this.entries = 0
     this.links = []
+    this.hardlinkSources = new Set()
   }
 
   rel(name) {
@@ -45,6 +46,26 @@ export class SafeWriter {
       else if (st.isSymbolicLink()) throw new UnsafeArchive('entry passes through symlink ' + path.relative(this.dest, cur))
       else if (!st.isDirectory()) throw new UnsafeArchive('entry parent is not a directory: ' + path.relative(this.dest, cur))
     }
+  }
+
+  // lstat every component: a hardlink source must be a regular file reached without crossing any symlink,
+  // otherwise `link -> sub/up/..` style chains make the copy read outside the destination.
+  regularFileNoSymlinks(rel) {
+    let cur = this.dest
+    const parts = rel.split('/')
+    for (let i = 0; i < parts.length; i += 1) {
+      cur = path.join(cur, parts[i])
+      const st = fs.lstatSync(cur, { throwIfNoEntry: false })
+      if (!st) return null
+      if (st.isSymbolicLink()) throw new UnsafeArchive('hardlink source passes through symlink ' + path.relative(this.dest, cur))
+      if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) return null
+      if (i === parts.length - 1) {
+        const real = fs.realpathSync.native(cur)
+        if (!isUnder(this.dest, real)) throw new UnsafeArchive('hardlink source resolves outside the destination: ' + rel)
+        return st
+      }
+    }
+    return null
   }
 
   target(rel) {
@@ -109,8 +130,8 @@ export class SafeWriter {
     const from = cleanRel(linkName, this.strip)
     if (rel === null || from === null) return
     const src = this.target(from)
-    const st = fs.lstatSync(src, { throwIfNoEntry: false })
-    if (!st || !st.isFile()) throw new UnsafeArchive('hardlink ' + rel + ' points at missing or non-regular ' + linkName)
+    const st = this.regularFileNoSymlinks(from)
+    if (!st) throw new UnsafeArchive('hardlink ' + rel + ' points at missing or non-regular ' + linkName)
     const parent = path.posix.dirname(rel)
     if (parent !== '.') this.ensureParents(parent)
     const t = this.target(rel)
@@ -118,10 +139,14 @@ export class SafeWriter {
     fs.copyFileSync(src, t)
     this.count(st.size)
     fs.chmodSync(t, (mode ?? st.mode) & 0o777 & ~0o7000 | 0o600)
+    this.hardlinkSources.add(from)
   }
 
   // Chains of symlinks can leave the tree even when each target looks local: resolve them for real.
   finish() {
+    for (const from of this.hardlinkSources) {
+      if (!this.regularFileNoSymlinks(from)) throw new UnsafeArchive('hardlink source is no longer a regular file: ' + from)
+    }
     for (const link of this.links) {
       let real
       try { real = fs.realpathSync.native(link) } catch (e) {
