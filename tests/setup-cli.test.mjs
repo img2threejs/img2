@@ -37,7 +37,8 @@ test('setup CLI refuses invalid input/options and offline fresh installs without
   }
   const r = run(sb, ['--offline'])
   for (const id of ['character', 'cs2', 'interior', 'jev', 'pixi2d']) assert.match(r.text, new RegExp('\\b' + id + '\\b'))
-  assert.match(r.text, /Git downloads are disabled/)
+  assert.equal(r.code, 2, r.text)
+  assert.equal(fs.existsSync(sb.H), false, r.text)
 })
 
 function installedFixture(t) {
@@ -49,6 +50,10 @@ function installedFixture(t) {
   for (const file of ['package.json', 'dependencies.lock.json', 'catalog.json']) fs.copyFileSync(path.join(ROOT, file), path.join(cli, file))
   fs.mkdirSync(path.join(sb.H, 'harness'), { recursive: true })
   git(path.join(sb.H, 'harness'), ['init', '-q'], sb.env)
+  fs.cpSync(path.join(ROOT, 'bin'), path.join(sb.H, 'harness/bin'), { recursive: true })
+  fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(sb.H, 'harness/package.json'))
+  git(path.join(sb.H, 'harness'), ['add', '.'], sb.env)
+  git(path.join(sb.H, 'harness'), ['commit', '-qm', 'installed harness'], sb.env)
   fs.mkdirSync(path.join(sb.home, '.claude'), { recursive: true })
   const dir = path.join(sb.H, 'plugins/cs2')
   fs.mkdirSync(dir, { recursive: true })
@@ -123,4 +128,14 @@ test('setup CLI --strict-hash refuses the lock\'s hash-weak artifacts in preflig
   assert.doesNotMatch(r.text, /Kept cs2/)
   assert.equal(fs.existsSync(path.join(sb.H, 'generated')), false)
   assert.equal(fs.existsSync(path.join(sb.home, '.claude/skills')), false)
+})
+
+test('H1 setup refuses an obsolete installed harness before runtime work', t => {
+  const sb = installedFixture(t)
+  fs.writeFileSync(path.join(sb.H, 'harness/bin/img2.mjs'), 'console.log(JSON.stringify({harness:"0.5.0",commands:["install","ensure"]}))\n')
+  const r = run(sb, ['--plugins', 'cs2', '--offline'], sb.bin)
+  assert.equal(r.code, 2, r.text)
+  assert.match(r.text, /installed harness.*route|installed harness.*obsolete/i)
+  assert.doesNotMatch(r.text, /==> provision/)
+  assert.equal(fs.existsSync(path.join(sb.H, 'provision.json')), false)
 })

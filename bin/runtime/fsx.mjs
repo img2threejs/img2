@@ -78,7 +78,3 @@ export function treeDigest(root) {
   walk(root, '')
   return h.digest('hex')
 }
-
-export function liveProcess(pid) {
-  try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
-}

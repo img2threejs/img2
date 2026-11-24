@@ -1,25 +1,22 @@
 import { spawn } from 'node:child_process'
 
-const STRIP_ENV = [
-  'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONUSERBASE', 'VIRTUAL_ENV', 'NODE_OPTIONS', 'NODE_PATH',
-  'PLAYWRIGHT_DOWNLOAD_HOST', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD',
-  'PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST', 'PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST', 'PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST',
-  'DOTNET_ROOT', 'HF_HOME', 'HF_HUB_CACHE', 'TRANSFORMERS_CACHE',
-]
-const STRIP_PREFIX = ['PIP_', 'npm_config_', 'NPM_CONFIG_', 'UV_']
+import { childEnv } from './child-env.mjs'
+
+const OVERRIDES = new Set([
+  'PATH', 'TMPDIR', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS',
+  'DOTNET_ROOT', 'DOTNET_BUNDLE_EXTRACT_BASE_DIR', 'DOTNET_CLI_HOME', 'DOTNET_NOLOGO',
+  'HF_HOME', 'HF_HUB_CACHE', 'TRANSFORMERS_CACHE', 'PYTHONDONTWRITEBYTECODE',
+])
 
 // A child environment that cannot be steered by ambient interpreter, pip, npm or browser settings.
 export function cleanEnv(overrides = {}, base = process.env) {
-  const env = {}
-  for (const [k, v] of Object.entries(base)) {
-    if (v === undefined || STRIP_ENV.includes(k) || STRIP_PREFIX.some((p) => k.startsWith(p))) continue
-    env[k] = v
-  }
+  const env = childEnv(base)
+  for (const [key, value] of Object.entries(overrides)) if (OVERRIDES.has(key) && value !== undefined) env[key] = value
   env.PYTHONNOUSERSITE = '1'
   env.PIP_NO_INPUT = '1'
   env.PIP_DISABLE_PIP_VERSION_CHECK = '1'
   env.NO_COLOR = '1'
-  return { ...env, ...overrides }
+  return env
 }
 
 const CAP = 4 * 1024 * 1024

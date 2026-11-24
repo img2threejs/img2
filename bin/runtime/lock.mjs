@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { validateDependenciesLock, validatePluginsLock } from './locks.mjs'
 import { Refusal } from './errors.mjs'
 import { sha256Hex } from './fsx.mjs'
+import { validatePayload } from './catalog-validation.mjs'
 
 export const HARNESS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 export const PROFILES = ['full', 'minimal']
@@ -54,12 +55,10 @@ export function loadLocks(root = HARNESS_ROOT) {
   const plugins = read('plugins.lock.json')
   const errors = validateDependenciesLock(deps.json, { invariants: root === HARNESS_ROOT })
   if (errors.length) throw new Refusal('dependencies.lock.json is invalid', errors.slice(0, 10).join('\n'))
-  let catalog = null
-  try { catalog = JSON.parse(fs.readFileSync(path.join(root, 'catalog.json'), 'utf8')) } catch { /* optional in fixtures */ }
-  if (catalog) {
-    const perrors = validatePluginsLock(plugins.json, catalog)
-    if (perrors.length) throw new Refusal('plugins.lock.json is invalid', perrors.slice(0, 10).join('\n'))
-  }
+  const catalog = read('catalog.json').json
+  try { validatePayload(catalog) } catch (error) { throw new Refusal('catalog.json is invalid', error.message) }
+  const perrors = validatePluginsLock(plugins.json, catalog)
+  if (perrors.length) throw new Refusal('plugins.lock.json is invalid', perrors.slice(0, 10).join('\n'))
   return { lock: deps.json, lockDigest: deps.digest, plugins: plugins.json, pluginsDigest: plugins.digest }
 }
 

@@ -8,7 +8,7 @@ import { executableLocalConfig, isDirty, runGit } from './gitsafe.mjs'
 export const coreDir = (H) => path.join(H, 'core')
 export const routePathOf = (H) => path.join(coreDir(H), 'forge', 'route.py')
 
-// Hardened Git (see gitsafe.mjs): neither the checkout's own config nor the user's can make it run a program.
+// Checkout configuration cannot run programs; only the caller's approved transport settings may do so.
 const git = (args, cwd) => {
   try {
     return runGit(args, cwd)

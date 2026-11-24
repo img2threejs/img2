@@ -51,7 +51,7 @@ function plugin(sb, dir, name = 'environment', version = '0.1.0') {
 
 function preload(sb, payload = catalog, reject = false) {
   fs.writeFileSync(sb.preload, `
-    import fs from 'node:fs';
+    const fs = require('node:fs');
     globalThis.fetch = async url => {
       if (url !== ${JSON.stringify(CATALOG_URL)}) throw new Error('unexpected URL');
       fs.writeFileSync(${JSON.stringify(sb.marker)}, JSON.stringify({ locked: fs.existsSync(${JSON.stringify(path.join(sb.H, '.lock'))}) }));
@@ -74,12 +74,12 @@ function sandbox(t) {
   fs.writeFileSync(config, '[url "file://' + origins + '/"]\n  insteadOf = https://github.com/img2threejs/\n')
   const sb = {
     root, HOME, origins, H: path.join(HOME, '.img2'),
-    marker: path.join(root, 'catalog-called'), preload: path.join(root, 'preload.mjs'),
+    marker: path.join(root, 'catalog-called'), preload: path.join(root, 'preload.cjs'),
     env: { HOME, PATH: path.join(HOME, '.local/bin') + path.delimiter + process.env.PATH,
       IMG2_HOME: path.join(HOME, '.img2'), XDG_CONFIG_HOME: path.join(HOME, '.config'),
       GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.file://' + origins + '/.insteadOf', GIT_CONFIG_VALUE_0: 'https://github.com/img2threejs/', GIT_TERMINAL_PROMPT: '0', NO_COLOR: '1' },
   }
-  sb.env.NODE_OPTIONS = '--import=' + sb.preload
+  sb.env.NODE_OPTIONS = '--require=' + sb.preload
   preload(sb)
   return sb
 }

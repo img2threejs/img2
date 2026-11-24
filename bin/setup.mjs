@@ -9,6 +9,7 @@ import { buildUnits } from './runtime/plan.mjs'
 import { managedPythonPath, realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
 import { cleanEnv } from './runtime/exec.mjs'
+import { childEnv } from './runtime/child-env.mjs'
 
 export const SETUP_PLUGINS = [
   { id: 'character', description: 'Rigged characters, skin conditioning and animation.' },
@@ -84,6 +85,22 @@ export async function resolveToolPython({ selection, locked, home, runtimeDeps }
     'the managed python-runtime is not part of this selection and no suitable python is on PATH.\nchecked: ' + (checked.join('; ') || 'nothing on PATH') + '\nNothing was changed.')
 }
 
+// Probe the installed executable, not this source CLI. Replacement remains an explicit update/install decision.
+export async function verifyInstalledHarness(home, deps = realDeps()) {
+  const file = path.join(home, 'harness', 'bin', 'img2.mjs')
+  const result = await deps.run(process.execPath, [file, '--version', '--json'], { env: cleanEnv({}, deps.env ?? process.env), timeout: 20_000 })
+  let info
+  try { info = JSON.parse(result.stdout) } catch { /* refused below */ }
+  const version = /^(\d+)\.(\d+)\.(\d+)$/.exec(info?.harness ?? '')
+  const current = version && (Number(version[1]) > 0 || Number(version[2]) >= 6)
+  if (result.code !== 0 || result.error || result.timedOut || !current || info?.interfaces?.route !== 1
+    || !['route', 'core-run', 'setup'].every(command => info?.commands?.includes(command))) {
+    throw new Refusal('installed harness is obsolete or lacks the required route interface',
+      'Update the clean official checkout explicitly with `img2 update harness --yes` to a reviewed release >= 0.6.0, or move it aside and use `img2 setup --from <reviewed-checkout>`. Setup did not provision runtimes.')
+  }
+  return info
+}
+
 const quote = value => /^[a-zA-Z0-9_./:@=-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'"
 const loginCommand = (home, python) => 'IMG2_HOME=' + quote(home) + ' ' + quote(python) + ' ' + quote(path.join(home, 'plugins/jev/tools/jev.py')) + ' login'
 
@@ -98,7 +115,7 @@ async function checkJevAuth(home, runtimeDeps, python) {
   let result
   try {
     result = await runtimeDeps.run(python, [path.join(home, 'plugins/jev/tools/jev.py'), 'auth-status'], {
-      env: cleanEnv({ IMG2_HOME: home }, runtimeDeps.env ?? process.env), timeout: 20_000,
+      env: { ...childEnv(runtimeDeps.env ?? process.env, { credentials: true }), IMG2_HOME: home, PYTHONNOUSERSITE: '1' }, timeout: 20_000,
     })
   } catch { /* do not expose runner exceptions or credential-storage diagnostics */ }
   let status
@@ -180,6 +197,7 @@ export async function runSetup(opts, home, deps) {
     const corePin = locked.plugins.core
     const coreState = deps.corePlan ? await deps.corePlan(corePin) : null
     const installNeeded = await deps.installNeeded()
+    if (!installNeeded && deps.verifyHarness) await deps.verifyHarness()
     const states = []
     for (const [i, pin] of pins.entries()) {
       const state = await deps.pluginState(pin)
@@ -190,7 +208,10 @@ export async function runSetup(opts, home, deps) {
       throw new Refusal('--offline requires an installed harness, the core and every selected plugin at its lock pin (or --from for a local harness); Git downloads are disabled')
     }
     const common = { home, yes: true }
-    if (installNeeded) await step('install', () => deps.install({ ...common, from: opts.from }))
+    if (installNeeded) {
+      await step('install', () => deps.install({ ...common, from: opts.from }))
+      if (deps.verifyHarness) await deps.verifyHarness()
+    }
     if (deps.core) {
       out('Core ' + (coreState.action === 'keep' ? 'kept at ' + coreState.ref : 'will be checked out at ' + corePin.commit))
       await step('core', () => deps.core(corePin, { offline: !!opts.offline }))

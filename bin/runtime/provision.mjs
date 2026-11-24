@@ -6,16 +6,17 @@ import { buildUnit, unitFingerprint, PROVISION_SCHEMA } from './build.mjs'
 import { Cache, httpsDownload } from './cache.mjs'
 import { EXIT, Refusal, StepError } from './errors.mjs'
 import { cleanEnv, mcpHandshake, realRunner } from './exec.mjs'
-import { atomicWriteJson, ensureDir, isUnder, liveProcess, rmrf } from './fsx.mjs'
+import { atomicWriteFile, atomicWriteJson, ensureDir, isUnder, rmrf } from './fsx.mjs'
 import { artifactsOf, assertSupported, detectPlatform, isBrowser, loadLocks, parseCsv, resolveSelection } from './lock.mjs'
 import { makePlan, planLines, buildUnits, playwrightOwner } from './plan.mjs'
 import { runProbes } from './probes.mjs'
 import { buildSelectors, checkSelectorPath, writeEnvSh, writeSelectors, selectorsPath, envShPath } from './selectors.mjs'
+import { acquireLock } from './provision-lock.mjs'
 
 export const runtimeRootOf = (home) => path.join(home, 'runtime')
 // The provisioned CPython 3.11 every plugin tool must run with (never the ambient python3).
 export const managedPythonPath = (home, lockDigest) => path.join(runtimeRootOf(home), lockDigest.slice(0, 12), 'runtime', 'python-runtime', 'bin', 'python3')
-const OWNED_FILES = ['selectors.json', 'env.sh', 'provision.json', '.provision.lock']
+const OWNED_FILES = ['selectors.json', 'env.sh', 'provision.json', 'provision-failed.json']
 const DIGEST_DIR = /^[0-9a-f]{12}$/
 // Receipt rows that identify installed bytes (artifact SHA-256 incl. the weak-pin ones, browser trees). They are stored in
 // each unit's own metadata at build time so a later run that reuses the unit can still report them.
@@ -57,27 +58,6 @@ export function parseProvisionOpts(opts) {
   }
 }
 
-// ---------------------------------------------------------------- locking
-
-function acquireLock(runtimeRoot) {
-  ensureDir(runtimeRoot)
-  const file = path.join(runtimeRoot, '.provision.lock')
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = fs.openSync(file, 'wx', 0o600)
-      fs.writeSync(fd, String(process.pid))
-      fs.closeSync(fd)
-      return () => rmrf(file)
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e
-      let pid = NaN
-      try { pid = Number(fs.readFileSync(file, 'utf8')) } catch { /* raced */ }
-      if (Number.isInteger(pid) && pid > 0 && liveProcess(pid)) throw new Refusal('another img2 provision is running (pid ' + pid + ')', 'wait for it, or remove ' + file + ' if that process is gone')
-      rmrf(file)
-    }
-  }
-  throw new Refusal('cannot take the provision lock at ' + file)
-}
 
 // ---------------------------------------------------------------- context
 
@@ -275,7 +255,13 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
   let failure = null
   const activated = []
   let rollbackFailed = []
+  const previous = new Map()
   try {
+    for (const name of ['selectors.json', 'env.sh', 'provision.json']) {
+      const file = path.join(runtimeRoot, name)
+      try { previous.set(name, { bytes: fs.readFileSync(file), mode: fs.statSync(file).mode & 0o777 }) }
+      catch (error) { if (error.code !== 'ENOENT') throw error; previous.set(name, null) }
+    }
     ensureDir(rtDir)
     recoverParked(rtDir)
     const ctx = makeCtx({ deps, rtDir, cacheDir: path.join(runtimeRoot, 'cache'), platform, lock, offline: o.offline, allowWeak: o.allowWeakHash, receipts })
@@ -352,21 +338,36 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
     const extra = {}
     for (const k of ['IMG2_PYTHON', 'SOURCE2VIEWER_CLI', 'DOTNET_ROOT']) if (exportsAll[k] !== undefined) extra[k] = exportsAll[k]
     writeEnvSh(runtimeRoot, selectors, extra)
-    rmrf(rollbackDir(rtDir)) // every unit and the selectors are in place: the previous units can go
     summary.status = 'ok'
     summary.weakArtifacts = receipts.filter((r) => r.kind === 'artifact' && r.weak).map((r) => ({ dependency: r.dependency, name: r.name, version: r.version, url: r.url, sha256: r.sha256, weak: r.weak, carriedForward: r.carriedForward || undefined }))
     summary.selectors = selectorsPath(runtimeRoot)
     out('selectors written: ' + selectorsPath(runtimeRoot))
     out('env script       : ' + envShPath(runtimeRoot))
+    summary.finishedAt = deps.now().toISOString()
+    atomicWriteJson(path.join(runtimeRoot, 'provision.json'), summary, 0o600)
+    rmrf(rollbackDir(rtDir)) // the receipt, selectors and all units committed together
   } catch (e) {
     failure = e
     rollbackFailed = rollBack(rtDir, activated, out)
     summary.status = 'failed'
     summary.rolledBack = activated.map((a) => a.name)
     summary.error = { message: e.message, detail: e.detail }
-  } finally {
+    for (const [name, original] of previous) {
+      try {
+        const file = path.join(runtimeRoot, name)
+        if (original) atomicWriteFile(file, original.bytes, original.mode)
+        else rmrf(file)
+      } catch (error) { rollbackFailed.push(name + ' (' + error.message + ')') }
+    }
     summary.finishedAt = deps.now().toISOString()
-    try { atomicWriteJson(path.join(runtimeRoot, 'provision.json'), summary, 0o600) } catch { /* reported below */ }
+    summary.rollbackFailed = rollbackFailed
+    try {
+      atomicWriteJson(path.join(runtimeRoot, 'provision-failed.json'), summary, 0o600)
+      let priorOk = false
+      try { priorOk = JSON.parse(previous.get('provision.json')?.bytes).status === 'ok' } catch { /* no usable previous receipt */ }
+      if (!priorOk || rollbackFailed.length) atomicWriteJson(path.join(runtimeRoot, 'provision.json'), summary, 0o600)
+    } catch (error) { (deps.err ?? out)('cannot record failed provisioning attempt: ' + error.message) }
+  } finally {
     release()
   }
   if (failure) {
@@ -374,8 +375,8 @@ async function execute({ o, plan, selection, lock, lockDigest, plugins, pluginsD
     ;(deps.err ?? out)('img2 provision failed: ' + failure.message)
     if (failure.detail) for (const l of String(failure.detail).split('\n')) (deps.err ?? out)('    ' + l)
     ;(deps.err ?? out)(rollbackFailed.length
-      ? 'rollback FAILED for ' + rollbackFailed.join('; ') + '; the next `img2 provision` restores the parked units first (receipt: ' + path.join(runtimeRoot, 'provision.json') + ')'
-      : 'every unit this run switched in was rolled back; the previous runtime is as it was. Rerun `img2 provision` to resume from the verified cache (receipt: ' + path.join(runtimeRoot, 'provision.json') + ')')
+      ? 'rollback FAILED for ' + rollbackFailed.join('; ') + '; inspect parked units before recovery (attempt: ' + path.join(runtimeRoot, 'provision-failed.json') + ')'
+      : 'every unit this run switched in was rolled back; the previous runtime is as it was. Rerun `img2 provision` to resume from the verified cache (attempt: ' + path.join(runtimeRoot, 'provision-failed.json') + ')')
     return EXIT.FAIL
   }
   return EXIT.OK
@@ -400,21 +401,19 @@ function absExports(unitDir, rel, unit) {
 export function removeRuntime(home, out = () => {}) {
   const runtimeRoot = runtimeRootOf(home)
   if (!fs.existsSync(runtimeRoot)) { out('nothing to remove: ' + runtimeRoot + ' does not exist'); return EXIT.OK }
-  const lockFile = path.join(runtimeRoot, '.provision.lock')
-  if (fs.existsSync(lockFile)) {
-    const pid = Number(fs.readFileSync(lockFile, 'utf8'))
-    if (Number.isInteger(pid) && liveProcess(pid)) throw new Refusal('img2 provision is running (pid ' + pid + '); not removing', lockFile)
-  }
+  const release = acquireLock(runtimeRoot)
   const removed = []
-  for (const name of fs.readdirSync(runtimeRoot)) {
-    const p = path.join(runtimeRoot, name)
-    const st = fs.lstatSync(p)
-    const owned = (DIGEST_DIR.test(name) && st.isDirectory() && !st.isSymbolicLink()) || (name === 'cache' && st.isDirectory() && !st.isSymbolicLink())
-      || (OWNED_FILES.includes(name) && (st.isFile() || st.isSymbolicLink()))
-    if (!owned) continue
-    rmrf(p)
-    removed.push(name)
-  }
+  try {
+    for (const name of fs.readdirSync(runtimeRoot)) {
+      const p = path.join(runtimeRoot, name)
+      const st = fs.lstatSync(p)
+      const owned = (DIGEST_DIR.test(name) && st.isDirectory() && !st.isSymbolicLink()) || (name === 'cache' && st.isDirectory() && !st.isSymbolicLink())
+        || (OWNED_FILES.includes(name) && (st.isFile() || st.isSymbolicLink()))
+      if (!owned) continue
+      rmrf(p)
+      removed.push(name)
+    }
+  } finally { release() }
   try { fs.rmdirSync(runtimeRoot) } catch { /* holds files img2 did not create: leave them */ }
   out('removed: ' + (removed.join(', ') || 'nothing') + (fs.existsSync(runtimeRoot) ? '\nleft in place (not created by img2): ' + fs.readdirSync(runtimeRoot).join(', ') : ''))
   return EXIT.OK

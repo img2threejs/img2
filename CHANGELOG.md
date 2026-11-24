@@ -13,6 +13,20 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Fixed
 
+- Prepare harness **0.6.0**: setup probes the installed CLI's route interface and refuses obsolete
+  installs before provisioning instead of reporting source-CLI behavior as installed capability.
+- Git transport preserves approved SSH, credential-helper, proxy and CA settings without trusting
+  checkout includes or executable config. Cleanliness hashes literal index/worktree bytes and
+  never runs filters, including worktree-config filters; SHA-pinned plugins cannot be downgraded
+  to ancestor tags or replaced by unrelated histories.
+- Failed runtime publication restores the prior successful receipt, selectors and units; failed
+  attempts have a separate record. Installer/probe environments use the shared allowlist, excluding
+  ambient credentials and interpreter/package-manager injection even through overrides.
+- Provision locks publish complete owner records atomically and release only the matching token/inode;
+  abandoned locks require explicit recovery rather than automatic PID-based stealing.
+- Pack `catalog.json` and require valid catalog/pin validation; document public sources, feature-branch
+  pins and explicit Linux arm64 bpy refusals without changing any upstream pins.
+
 - The core router's harness pin check (`HarnessPin._imports`) accepts the launcher again: `bin/locks.mjs`
   moved to `bin/runtime/locks.mjs` (only `./` imports are provable) and every probe program that used
   `require(`/`import(` moved out of `bin/` into data files under `runtime-probes/` that

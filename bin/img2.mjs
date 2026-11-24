@@ -16,7 +16,7 @@ import { Refusal as ProvisionRefusal } from './runtime/errors.mjs'
 import { loadLocks } from './runtime/lock.mjs'
 import { managedPythonPath, realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
-import { runSetup } from './setup.mjs'
+import { runSetup, verifyInstalledHarness } from './setup.mjs'
 import { describeRun, prepareCoreRun, runCore } from './route.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
@@ -118,7 +118,7 @@ export function harnessVersion() {
 
 // ---------------------------------------------------------------- git
 
-// Every Git call goes through gitsafe.mjs: checkouts are untrusted, so repository/user/system config cannot run programs.
+// gitsafe.mjs isolates checkout inspection from the caller's explicitly trusted transport configuration.
 function git(args, cwd) {
   try {
     return runGit(args, cwd)
@@ -1645,6 +1645,7 @@ async function cmdSetup(opts, args) {
       }
       return !fs.existsSync(harnessDir(H)) || !fs.existsSync(registryPath(H)) || !fs.existsSync(receiptsPath(H))
     },
+    verifyHarness: () => verifyInstalledHarness(H),
     pluginState: pin => {
       const row = findRow(readRegistry(H), pin.id)
       const dir = cloneDir(H, pin.id)
@@ -2144,6 +2145,21 @@ async function cmdUpdate(opts, args) {
         }
         fetch = () => resolveRefAndClone(H, row.repo, { ...opts, ref: latest, allowAnySource: true })
       }
+      let cloned = null
+      if (!row.repo.startsWith('npm:') && /^[0-9a-f]{40}$/.test(row.ref)) {
+        cloned = await fetch()
+        staging = cloned.staging
+        const ancestor = (from, to) => { try { git(['merge-base', '--is-ancestor', from, to], staging); return true } catch { return false } }
+        if (ancestor(cloned.resolvedSha, row.resolvedSha)) {
+          fs.rmSync(staging, { recursive: true, force: true }); staging = null
+          ui.table(['Plugin', 'Status', 'Ref'], [[row.id, 'kept SHA pin', row.ref]], { statusColumn: 1 })
+          continue
+        }
+        if (!ancestor(row.resolvedSha, cloned.resolvedSha)) {
+          throw new CliError(EXIT.REFUSED, row.id + ': release ' + latest + ' is unrelated to the installed SHA pin',
+            'The pin was preserved. Select a reviewed descendant pin through setup or explicit add --ref; unrelated histories are never replaced automatically.')
+        }
+      }
 
       if (latest === row.ref) {
         ui.table(['Plugin', 'Status', 'Ref'], [[row.id, 'up to date', row.ref]], { statusColumn: 1 })
@@ -2152,10 +2168,11 @@ async function cmdUpdate(opts, args) {
       pending += 1
       if (opts.check) {
         ui.table(['Plugin', 'Status', 'Current', 'Latest'], [[row.id, 'pending', row.ref, latest]], { statusColumn: 1 })
+        if (staging) { fs.rmSync(staging, { recursive: true, force: true }); staging = null }
         continue
       }
 
-      const cloned = await fetch()
+      cloned ??= await fetch()
       staging = cloned.staging
       const manifest = readManifest(staging)
       if (manifest.name !== row.id) {
@@ -2687,6 +2704,7 @@ async function main() {
       console.log(JSON.stringify({
         harness: harnessVersion(),
         maxPluginSchema: MAX_PLUGIN_SCHEMA,
+        interfaces: { route: 1, setup: 1 },
         coreApi: CORE_API,
         contract: CONTRACT_REVISION,
         commands: Object.keys(COMMANDS),

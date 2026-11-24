@@ -11,18 +11,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Refusal } from './runtime/errors.mjs'
 import { isUnder } from './runtime/fsx.mjs'
+import { childEnv } from './runtime/child-env.mjs'
 
 // Provisioned environments that carry a probe-verified Pillow, in preference order (Jev's own pin first).
 export const PILLOW_UNITS = ['jev', 'pixi2d', 'character', 'interior-surfaces', 'glb-tools', 'vision']
 // The only host variables a core run inherits: identity and locale, the credential store, TLS/proxy plumbing.
 // TYPESAFE_API_KEY is Jev's documented credential override; it is passed through and never printed.
-const PASS_ENV = [
-  'HOME', 'USER', 'LOGNAME', 'LANG', 'TERM', 'TMPDIR', 'TZ', 'NO_COLOR',
-  'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS',
-  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
-  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
-  'TYPESAFE_API_KEY',
-]
 const SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
 const PIN_FLAGS = [
   ['--harness-root', 'harnessRoot'], ['--harness-sha', 'harnessSha'],
@@ -228,9 +222,7 @@ export function buildRouteEnv({ home, record }, host = process.env) {
   const blender = findOnPath('blender', host.PATH)
   const dirs = [path.dirname(record.python.path), path.dirname(node),
     blender ? path.dirname(blender) : null, ...absoluteDirs(host.PATH), ...SYSTEM_PATH].filter(Boolean)
-  const env = {}
-  for (const key of PASS_ENV) if (host[key] !== undefined) env[key] = host[key]
-  for (const key of Object.keys(host)) if (key.startsWith('LC_')) env[key] = host[key]
+  const env = childEnv(host, { credentials: true })
   env.PATH = [...new Set(dirs)].join(path.delimiter)
   env.LANG ??= 'C.UTF-8'
   env.IMG2_HOME = home

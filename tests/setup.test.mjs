@@ -22,11 +22,11 @@ const CORE_COMMIT = 'c'.repeat(40)
 const setupOpts = (o = {}) => ({ yes: true, plugins: null, minimal: false, allowWeakHash: false, skip: [], offline: false, ...o })
 const code = (e) => e?.code
 
-// plugins.lock.json with immutable pins (repo, 40-hex commit, visibility); no catalog is needed.
+// Immutable official pins, validated against the shared fixture catalog.
 function pinnedFixture(over = {}) {
   const fx = makeFixture(over)
   fx.pluginsLock.plugins = IDS.map((id) => ({
-    id, capability: id, repo: REPO[id], commit: COMMIT[id], visibility: 'public', selectable: true, default: true,
+    id, capability: id, repo: REPO[id], commit: COMMIT[id], visibility: 'public', selectable: true, default: true, pinState: 'on-origin', note: 'fixture',
   }))
   fs.writeFileSync(path.join(fx.root, 'plugins.lock.json'), JSON.stringify(fx.pluginsLock, null, 2))
   return fx
@@ -387,7 +387,7 @@ test('an invalid or foreign lock pin is refused before any step runs; an unpushe
     assert.deepEqual(h.log, [], JSON.stringify(patch))
   }
   const fx = pinnedFixture()
-  fx.pluginsLock.plugins.find((p) => p.id === 'cs2').pinState = 'unpushed-local'
+  Object.assign(fx.pluginsLock.plugins.find((p) => p.id === 'cs2'), { pinState: 'unpushed-local', note: 'fixture commit is unpushed-local' })
   fs.writeFileSync(path.join(fx.root, 'plugins.lock.json'), JSON.stringify(fx.pluginsLock))
   const h = harness({ fx, states: { cs2: { action: 'add', ref: null } } })
   assert.equal(await runSetup(setupOpts({ plugins: 'cs2' }), homeOf(), h.deps), 0, h.text())

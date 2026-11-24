@@ -143,12 +143,19 @@ export function makeFixture({ mutate } = {}) {
   const pluginsLock = {
     schema: 1, defaultInstall: 'all',
     core: { id: 'core', repo: 'https://github.com/img2threejs/img2threejs', commit: 'c'.repeat(40), branch: 'main', pinState: 'on-origin', note: 'fixture' },
-    plugins: ['character', 'cs2', 'interior', 'jev', 'pixi2d'].map((id) => ({ id, capability: id, selectable: true, default: true })),
+    plugins: ['character', 'cs2', 'interior', 'jev', 'pixi2d'].map((id) => ({
+      id, capability: id, selectable: true, default: true, repo: 'https://github.com/img2threejs/plugin-' + id,
+      commit: sha256(Buffer.from(id)).slice(0, 40), visibility: 'public', pinState: 'on-origin', note: 'fixture',
+    })),
   }
   mutate?.(lock, bytes)
   const root = tmp('img2-lock-')
   fs.writeFileSync(path.join(root, 'dependencies.lock.json'), JSON.stringify(lock, null, 2))
   fs.writeFileSync(path.join(root, 'plugins.lock.json'), JSON.stringify(pluginsLock, null, 2))
+  fs.writeFileSync(path.join(root, 'catalog.json'), JSON.stringify({
+    schema: 1, updatedAt: '2026-11-24',
+    plugins: pluginsLock.plugins.map(p => ({ id: p.id, description: p.id, source: 'img2threejs/plugin-' + p.id, access: 'public', npmCli: null })),
+  }))
   return { root, bytes, lock, pluginsLock, entry: (id) => lock.dependencies.find((d) => d.id === id) }
 }
 

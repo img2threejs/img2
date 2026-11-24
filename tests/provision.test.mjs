@@ -257,7 +257,8 @@ test('a failed step leaves the previous runtime untouched, then a re-run resumes
   assert.equal(await runProvision(baseOpts(), deps2.home, deps2), EXIT.FAIL)
   assert.deepEqual(snapshot(dir), before, 'previous runtime is byte-identical')
   assert.equal(fs.readFileSync(path.join(rt(deps), 'selectors.json'), 'utf8'), beforeSel, 'selectors still point at the previous runtime')
-  assert.equal(readJson(path.join(rt(deps), 'provision.json')).status, 'failed')
+  assert.equal(readJson(path.join(rt(deps), 'provision.json')).status, 'ok')
+  assert.equal(readJson(path.join(rt(deps), 'provision-failed.json')).status, 'failed')
   assert.equal(fs.existsSync(path.join(digestDir(deps2, fx2), '.staging', 'character')), false, 'failed stage is removed')
 
   const deps3 = makeDeps(fx2, { home: deps.home, download: stubDownloader(fx2.bytes) })
@@ -435,13 +436,14 @@ test('pip installs from a generated requirements file with hashes, wheels only, 
 })
 
 test('ambient pip/python/node settings never reach installer or probe children', async () => {
-  const keep = { PIP_INDEX_URL: process.env.PIP_INDEX_URL, PYTHONPATH: process.env.PYTHONPATH, NODE_OPTIONS: process.env.NODE_OPTIONS }
-  process.env.PIP_INDEX_URL = 'https://evil.example.test/'; process.env.PYTHONPATH = '/evil'; process.env.NODE_OPTIONS = '--require /evil.js'
+  const keys = ['PIP_INDEX_URL', 'PYTHONPATH', 'NODE_OPTIONS', 'GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'TYPESAFE_API_KEY']
+  const keep = Object.fromEntries(keys.map(key => [key, process.env[key]]))
+  for (const key of keys) process.env[key] = 'synthetic-runtime-canary'
   try {
     const fx = makeFixture(); const deps = makeDeps(fx)
-    await runProvision(baseOpts({ plugins: 'character' }), deps.home, deps)
+    assert.equal(await runProvision(baseOpts({ plugins: 'character' }), deps.home, deps), EXIT.OK)
     for (const c of deps.run.calls) {
-      assert.equal(c.env?.PIP_INDEX_URL, undefined); assert.equal(c.env?.PYTHONPATH, undefined); assert.equal(c.env?.NODE_OPTIONS, undefined)
+      for (const key of keys) assert.equal(c.env?.[key], undefined, key)
       assert.equal(c.env?.PYTHONNOUSERSITE, '1')
     }
   } finally { for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v } }
@@ -476,26 +478,32 @@ test('--remove removes only what provisioning owns', async () => {
   assert.equal(removeRuntime(clean.home), EXIT.OK, 'removing nothing is fine')
 })
 
-test('a second provision cannot run concurrently, and a stale lock from a dead process is cleared', async () => {
+test('a second provision cannot run concurrently, and stale lock recovery is explicit', async () => {
   const fx = makeFixture(); const deps = makeDeps(fx)
   fs.mkdirSync(rt(deps), { recursive: true })
   fs.writeFileSync(path.join(rt(deps), '.provision.lock'), String(process.pid))
   const e = await refusal(() => runProvision(baseOpts(), deps.home, deps))
-  assert.match(e.message, /another img2 provision is running/)
+  assert.match(e.message, /another img2 provision owns the lock/)
   fs.writeFileSync(path.join(rt(deps), '.provision.lock'), '2147483646')
+  const stale = await refusal(() => runProvision(baseOpts(), deps.home, deps))
+  assert.equal(stale.code, EXIT.REFUSED)
+  fs.unlinkSync(path.join(rt(deps), '.provision.lock')) // operator recovery after proving the owner is gone
   assert.equal(await runProvision(baseOpts(), deps.home, deps), EXIT.OK)
   assert.equal(fs.existsSync(path.join(rt(deps), '.provision.lock')), false, 'lock released')
 })
 
 test('the real CLI wires provision: --plan works against the shipped lock and writes nothing', () => {
   const home = tmp()
+  const unavailable = process.platform === 'linux' && process.arch === 'arm64'
   const r = spawnSync(process.execPath, [BIN, 'provision', '--plan'], { env: { ...process.env, IMG2_HOME: home }, encoding: 'utf8' })
-  assert.equal(r.status, 0, r.stderr)
-  assert.match(r.stdout, /character-bpy/); assert.match(r.stdout, /interior-bpy/); assert.match(r.stdout, /nothing was written/)
+  assert.equal(r.status, unavailable ? 2 : 0, r.stderr)
+  if (!unavailable) {
+    assert.match(r.stdout, /character-bpy/); assert.match(r.stdout, /interior-bpy/); assert.match(r.stdout, /nothing was written/)
+  }
   assert.deepEqual(fs.readdirSync(home), [])
   const noTty = spawnSync(process.execPath, [BIN, 'provision', '--profile', 'minimal'], { env: { ...process.env, IMG2_HOME: home }, encoding: 'utf8', input: '' })
   assert.equal(noTty.status, 2)
-  assert.match(noTty.stderr, /not a terminal/)
+  if (!unavailable) assert.match(noTty.stderr, /not a terminal/)
   assert.deepEqual(fs.readdirSync(home), [])
   assert.equal(spawnSync(process.execPath, [BIN, 'provision', '--profile', 'huge', '--plan'], { env: { ...process.env, IMG2_HOME: home }, encoding: 'utf8' }).status, 2)
   assert.equal(spawnSync(process.execPath, [BIN, 'provision', '--remove', '--plan'], { env: { ...process.env, IMG2_HOME: home }, encoding: 'utf8' }).status, 2)
@@ -585,7 +593,8 @@ test('a failing later unit rolls back units this run already switched in, and th
   assert.equal(fs.existsSync(path.join(dir, '.rollback')), false)
   assert.match(second.errs.join('\n'), /rolled back/)
   assert.doesNotMatch(second.errs.join('\n'), /untouched/)
-  assert.ok(readJson(path.join(rt(first), 'provision.json')).rolledBack.includes('character'))
+  assert.ok(readJson(path.join(rt(first), 'provision-failed.json')).rolledBack.includes('character'))
+  assert.equal(readJson(path.join(rt(first), 'provision.json')).status, 'ok')
   // and the runtime still works: a clean rerun succeeds
   assert.equal(await runProvision(baseOpts(), first.home, makeDeps(fx, { home: first.home })), EXIT.OK)
 })
@@ -625,4 +634,20 @@ test('vision probes pinned distributions inside a closure-only lock entry, not i
   } })
   const deps = makeDeps(fx)
   assert.equal(await runProvision(baseOpts(), deps.home, deps), EXIT.OK, deps.errs.join('\n'))
+})
+
+test('H5 late publication failure preserves the usable runtime receipt and selectors', async () => {
+  const fx = makeFixture(); const deps = makeDeps(fx)
+  assert.equal(await runProvision(baseOpts(), deps.home, deps), EXIT.OK)
+  const original = Object.fromEntries(['provision.json', 'selectors.json', 'env.sh'].map(name => [name, fs.readFileSync(path.join(rt(deps), name))]))
+  const before = snapshot(digestDir(deps, fx))
+  const next = makeFixture({ mutate: lock => { lock.generatedAt = 'late-publication' } })
+  const broken = makeDeps(next, { home: deps.home, out: text => { if (text.startsWith('env script')) throw new Error('injected late publication failure') } })
+  assert.equal(await runProvision(baseOpts(), broken.home, broken), EXIT.FAIL)
+  for (const [name, bytes] of Object.entries(original)) assert.equal(sha256(fs.readFileSync(path.join(rt(deps), name))), sha256(bytes), name)
+  assert.deepEqual(snapshot(digestDir(deps, fx)), before)
+  const receipt = readJson(path.join(rt(deps), 'provision.json'))
+  assert.equal(receipt.status, 'ok')
+  assert.equal(receipt.lockDigest, readJson(path.join(rt(deps), 'selectors.json')).lockDigest)
+  assert.equal(readJson(path.join(rt(deps), 'provision-failed.json')).status, 'failed')
 })

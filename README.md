@@ -34,7 +34,7 @@ runtime and audits the result.
 | `character` | Character rigging, skin conditioning, animation and rig gates | Public |
 | `cs2` | Counter-Strike 2 weapon/glove skin reconstruction and review gates | Public |
 | `interior` | Image/reference to an interior scene: Blender authoring, PBR, render/repair and verified delivery | Public |
-| `jev` | Bounded image-aware routing and repair advisories to the right plugin; never acceptance authority | **Private: authorized Git access required** |
+| `jev` | Bounded image-aware routing and repair advisories to the right plugin; never acceptance authority | Public |
 | `pixi2d` | Explicit 2D image reconstruction in PixiJS with editable nodes and a blocking review gate | Public |
 
 Choose a plugin set at the prompt (Enter = all five, or a comma list such as `cs2,jev`), or skip
@@ -78,6 +78,9 @@ source), `--strict-hash`, `--skip` and `--offline` (`--allow-weak-hash` is still
 ### What setup does
 
 1. `install`, only if the harness checkout or installation metadata is absent.
+   Setup verifies the **installed** CLI is >= 0.6.0 and advertises route interface 1 before provisioning.
+   An obsolete checkout is refused, not silently upgraded: explicitly run `img2 update harness --yes`
+   to a reviewed release, or move it aside and use `--from` with a reviewed checkout.
 1b. `core`: check out the pinned core skill (`plugins.lock.json` `core`: repo
    `img2threejs/img2threejs`, one exact commit) at `$IMG2_HOME/core`, verify `HEAD` equals the pin, and
    link it into each detected host as `img2threejs` (a foreign file or symlink there is refused before
@@ -129,11 +132,14 @@ code.
 
 ### Requirements
 
-- macOS or Linux (Windows is refused)
+- macOS arm64/x64 or Linux x64 for the complete runtime; Windows is refused.
+- Linux arm64 supports platform-available subsets, **not** the default full setup: the locked
+  character `bpy==4.5.15` and interior `bpy==4.3.0` publish no matching wheels. Provisioning refuses
+  unless you explicitly omit these capabilities with `--skip character-bpy --skip interior-bpy`;
+  that is not equivalent to a complete character/interior installation.
 - Node.js ≥ 18, Git (for bootstrap) and Python ≥ 3.10
 - At least one detected agent host: Claude Code, Codex or OpenCode (see [Prerequisites](#prerequisites))
-- Network access for the first run, and authorized Git access to the private `jev` repository if
-  you select it
+- Network access for the first run; authorized Git access is needed for any private source you explicitly select.
 - Disk: a full provision downloads about **2.3 GB** (`img2 provision --plan` reports
   `>= 2.29 GB` plus entries whose size the lock does not publish). Expanded size, cache and peak
   disk are additional and platform-dependent; run `img2 provision --plan` (it writes nothing) for
@@ -187,10 +193,10 @@ doctors. A plugin registered as a local link, with local modifications, or from 
 
 ### Known limitation: current pins
 
-`plugins.lock.json` currently marks **four** pins (`character`, `cs2`, `interior`, `jev`) as
-`unpushed-local`: the lock records them as not yet on the remote. Until those commits are pushed or
-the lock is re-pinned, fresh cloning may fail. Setup warns and never substitutes another ref.
-`pixi2d` is marked on-origin. `jev` additionally needs authorized private-repository access.
+All current core/plugin pins are marked `on-origin`: their commits are on the feature branches named
+in `plugins.lock.json`, **not yet on `main` or an accepted release**. They must be reviewed and
+merged or re-pinned before release. Setup uses the exact commits and never substitutes another ref;
+final plugin fixes and the corresponding core/harness lock closure are still pending.
 
 ### Troubleshooting
 
@@ -213,8 +219,18 @@ img2 provision --plan  # what would be downloaded; writes nothing
   times out on macOS arm64 with sandbox-extension denials and a SWGL framebuffer error; provisioning
   does not disable its sandbox or substitute a different build. `--skip browser-mcp-playwright`
   explicitly disables the whole unit and `mcp-playwright`.
-- **Private Jev clone fails:** obtain repository permission, configure Git authentication, then
-  re-run `img2 setup`.
+- **Git authentication/transport:** HTTPS credential helpers, SSH commands, proxy and CA settings are
+  accepted from the caller's direct global Git config (without includes) or transport-only
+  `GIT_CONFIG_COUNT` entries; `GIT_SSH`/`GIT_SSH_COMMAND` are honored only for transport. Put approved
+  transport settings in that trusted configuration, not a plugin checkout. Checkout-controlled
+  executable config/includes are refused before fetch; hooks, filters, external diffs, `ext` protocol
+  and TLS-verification bypass remain disabled.
+- **Failed reprovision:** units, selectors, `env.sh` and the previous successful `runtime/provision.json`
+  are restored together. The failed attempt is recorded separately in `runtime/provision-failed.json`;
+  without a prior successful runtime, `provision.json` honestly reports failure.
+- **Abandoned provision lock:** empty/malformed records and dead/reused PIDs do not authorize stealing
+  the lock. Verify the original provisioner has exited, explicitly remove
+  `$IMG2_HOME/runtime/.provision.lock`, then rerun provision to recover parked units. Never remove a live owner's lock.
 
 The rest of this README is the detailed reference: the document map, the manual step-by-step
 install, explicit add/update/remove, discovery and layout.
@@ -383,7 +399,10 @@ or replaces one, and accepts no options. Without the marker, or with `IMG2_AUTO_
 choice; it is not a security boundary. Agent skills are instructed never to write it, but an
 agent that can write files under `$IMG2_HOME` could create it, which is why `ensure` is limited
 to public official catalog plugins.
-Git updates follow the newest reachable semver tag. Local `--link` checkouts are live and
+Git updates follow the newest reachable semver tag, but a full-SHA pin is never compared to tag text:
+an ancestor tag leaves the pin intact, only a proven descendant release may advance it, and an
+unrelated history is refused. Use a reviewed updated setup lock or explicit `add --ref` for a
+deliberate pin change. Local `--link` checkouts are live and
 are not fetched by `update`. Removal drops the registry row and its user-authored overrides;
 it does not delete the original source checkout of a local link.
 
