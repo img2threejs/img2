@@ -8,16 +8,19 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { ui } from './ui.mjs'
 import { CATALOG_URL, getCatalog } from './catalog.mjs'
 import { isDirty, runGit } from './gitsafe.mjs'
 import { coreDir, coreState, ensureCoreCheckout, routePathOf } from './core.mjs'
 import { Refusal as ProvisionRefusal } from './runtime/errors.mjs'
-import { loadLocks } from './runtime/lock.mjs'
+import { detectPlatform, loadLocks, resolveSelection } from './runtime/lock.mjs'
 import { managedPythonPath, realDeps, runProvision } from './runtime/provision.mjs'
 import { runDoctorRuntime } from './runtime/doctor.mjs'
 import { runSetup, verifyInstalledHarness } from './setup.mjs'
-import { describeRun, prepareCoreRun, runCore } from './route.mjs'
+import { atomicWriteFile } from './runtime/fsx.mjs'
+import { describeRun, findPillowEnv, loadRouteRecord, prepareCoreRun, runCore } from './route.mjs'
+import { routeInstallPins, routeInstallRequest } from './route-selection.mjs'
 
 export const EXIT = { OK: 0, FAIL: 1, REFUSED: 2, NEEDS_INPUT: 3 }
 export const MAX_PLUGIN_SCHEMA = 1
@@ -1763,13 +1766,170 @@ async function cmdCorePath(opts) {
   }
   return EXIT.OK
 }
+// Download selection is separate from the core's unchanged routing and execution authority.
+async function prepareRouteWithPlugins(home, args) {
+  const prepare = () => prepareCoreRun({ kind: 'route', args, home })
+  const request = routeInstallRequest(args)
+  if (!request || process.env.IMG2_AUTO_INSTALL === '0' || !fs.existsSync(autoInstallPath(home))) return prepare()
+  const loaded = loadRouteRecord(home)
+  home = loaded.home
+  findPillowEnv(loaded)
+  const hd = fs.realpathSync(harnessDir(home))
+  if (hd !== loaded.record.pins.harnessRoot || path.join(hd, 'bin/img2.mjs') !== loaded.record.pins.harnessExecutable
+    || git(['rev-parse', 'HEAD'], hd) !== loaded.record.pins.harnessSha || gitIsDirty(hd)) {
+    throw new CliError(EXIT.REFUSED, 'automatic route installation requires the clean setup-pinned harness')
+  }
+  for (const name of ['catalog.json', 'plugins.lock.json', 'dependencies.lock.json']) {
+    if (!fs.lstatSync(path.join(hd, name)).isFile()) throw new CliError(EXIT.REFUSED, 'pinned installation metadata must be a regular file: ' + name)
+  }
+  const locked = loadLocks(hd)
+  if (locked.lockDigest !== loaded.record.lockDigest) throw new CliError(EXIT.REFUSED, 'the runtime and installed dependency lock differ; rerun setup')
+  const pins = routeInstallPins(locked.plugins, request)
+  if (!pins.length) return prepare()
+  const selectors = JSON.parse(fs.readFileSync(path.join(home, 'runtime/selectors.json'), 'utf8'))
+  for (const pin of pins) {
+    if (pin.visibility !== 'public' || !pin.selectable || pin.pinState !== 'on-origin') {
+      throw new CliError(EXIT.REFUSED, 'route installation requires a public, selectable, on-origin pin: ' + pin.id)
+    }
+    resolveSelection({ lock: locked.lock, pluginsLock: locked.plugins, platform: detectPlatform(), plugins: [pin.id], profile: 'full' })
+    if (selectors.schema !== 1 || selectors.lockDigest !== loaded.record.lockDigest || selectors.pluginsLockDigest !== locked.pluginsDigest
+      || !Array.isArray(selectors.selectedPlugins) || !selectors.selectedPlugins.includes(pin.id)) {
+      throw new CliError(EXIT.REFUSED, 'the provisioned runtime does not select ' + pin.id, 'run setup with this plugin before requesting its producer')
+    }
+  }
+  const until = Date.now() + 30_000
+  for (;;) {
+    // Do not invoke age-based recovery while another installer owns the home lock.
+    if (!fs.lstatSync(lockPath(home), { throwIfNoEntry: false })) {
+      try { acquireLock(home); break } catch (error) {
+        if (!fs.lstatSync(lockPath(home), { throwIfNoEntry: false })) throw error
+      }
+    }
+    if (Date.now() >= until) throw new CliError(EXIT.REFUSED, 'another installer still owns ' + lockPath(home))
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  try {
+    for (const pin of pins) await installRoutePin(home, pin)
+    return prepare()
+  } finally { releaseLock() }
+}
+
+function verifiedRouteCard(dir, pin) {
+  let raw, card
+  try {
+    const file = path.join(dir, 'route.json')
+    if (!fs.lstatSync(file).isFile()) throw new Error('not a regular route card')
+    raw = fs.readFileSync(file)
+    card = JSON.parse(raw)
+  } catch { throw new CliError(EXIT.REFUSED, 'the exact pinned route card is missing or malformed: ' + pin.id) }
+  if (createHash('sha256').update(raw).digest('hex') !== pin.routing.routeCardSha256 || !isDeepStrictEqual(card, pin.routing.card)) {
+    throw new CliError(EXIT.REFUSED, 'the downloaded route card differs from its exact locked snapshot: ' + pin.id)
+  }
+  return card
+}
+
+async function installRoutePin(H, pin) {
+  const normalize = value => String(value).replace(/\.git$/, '').replace(/^https:\/\/github\.com\//, '')
+  const reg = readRegistry(H)
+  const existing = findRow(reg, pin.id)
+  const dest = cloneDir(H, pin.id)
+  if (existing) {
+    if (normalize(existing.repo) !== normalize(pin.repo) || existing.resolvedSha !== pin.commit
+      || classifyTarget(dest).state !== 'directory' || !isGitRepo(dest)
+      || git(['rev-parse', 'HEAD'], dest) !== pin.commit
+      || normalize(git(['remote', 'get-url', 'origin'], dest)) !== normalize(pin.repo) || gitIsDirty(dest)) {
+      throw new CliError(EXIT.REFUSED, 'route will not replace local, dirty or differently pinned plugin ' + pin.id, 'use explicit setup to choose a replacement')
+    }
+    verifiedRouteCard(dest, pin)
+    return
+  }
+  if (classifyTarget(dest).state !== 'absent') throw new CliError(EXIT.REFUSED, 'unregistered plugin path exists: ' + dest)
+  const links = detectedHosts().map(host => ({ host, target: path.join(HOSTS[host].skills(), linkName(pin.id)) }))
+  for (const { target } of links) assertClaimable(target, H)
+  const snapshots = new Map(), createdDirs = new Set()
+  const remember = file => {
+    const st = fs.lstatSync(file, { throwIfNoEntry: false })
+    if (st && !st.isFile() && !st.isSymbolicLink()) throw new CliError(EXIT.REFUSED, 'not an installation file: ' + file)
+    snapshots.set(file, !st ? null : st.isSymbolicLink() ? { link: fs.readlinkSync(file) } : { bytes: fs.readFileSync(file), mode: st.mode & 0o777 })
+  }
+  const parents = dir => {
+    for (let p = dir; !fs.existsSync(p); p = path.dirname(p)) createdDirs.add(p)
+    fs.mkdirSync(dir, { recursive: true })
+  }
+  for (const dir of [pluginsDir(H), generatedDir(H)]) {
+    const st = fs.lstatSync(dir, { throwIfNoEntry: false })
+    if (st && (!st.isDirectory() || st.isSymbolicLink())) throw new CliError(EXIT.REFUSED, 'not a managed installation directory: ' + dir)
+    if (!st) createdDirs.add(dir)
+  }
+  const staging = path.join(pluginsDir(H), '.staging-' + process.pid)
+  let activated = false, failed = false
+  try {
+    const fetched = await resolveRefAndClone(H, pin.repo, { yes: true, ref: pin.commit })
+    if (fetched.resolvedSha !== pin.commit) throw new CliError(EXIT.REFUSED, 'download differs from the exact plugin pin')
+    const manifest = readManifest(staging)
+    const card = verifiedRouteCard(staging, pin)
+    if (manifest.name !== pin.id || !['3d-scene', '3d-object', 'rigged-3d', 'spec-augmentation'].includes(card.outputKind)) {
+      throw new CliError(EXIT.REFUSED, 'the pinned plugin is not the requested 3D producer: ' + pin.id)
+    }
+    const unsafe = unsafeRowFinding(staging)
+    if (unsafe) throw new CliError(EXIT.REFUSED, 'unsafe pinned producer: ' + pin.id, unsafe.reason)
+    const files = [registryPath(H), receiptsPath(H), path.join(H, 'provision.json'),
+      path.join(generatedDir(H), 'index.md'), path.join(generatedDir(H), 'routes.json')]
+    for (const file of [...files, ...links.map(link => link.target)]) remember(file)
+    for (const file of files) if (snapshots.get(file)?.link) throw new CliError(EXIT.REFUSED, 'installation metadata must not be a symlink: ' + file)
+    const receiptBytes = snapshots.get(receiptsPath(H))?.bytes
+    const receipts = receiptBytes ? JSON.parse(receiptBytes) : []
+    if (!Array.isArray(receipts)) throw new CliError(EXIT.REFUSED, 'invalid installation receipts')
+    fs.renameSync(staging, dest); activated = true
+    addRow(reg, { id: pin.id, repo: normalize(pin.repo), ref: pin.commit, resolvedSha: pin.commit, addedAt: new Date().toISOString() })
+    const expected = computeGenerated(H, reg)
+    parents(generatedDir(H))
+    for (const { file, want } of generatedIndexTargets(H, expected)) atomicWriteFile(file, want, 0o600)
+    for (const file of localFiles(dest)) atomicWriteFile(file, expected.local, 0o600)
+    for (const { host, target } of links) {
+      parents(path.dirname(target))
+      ensureLink(target, dest, H)
+      const old = receipts.findIndex(receipt => receipt.target === target)
+      if (old !== -1) receipts.splice(old, 1)
+      receipts.push({ host, plugin: pin.id, target, canonical: dest, createdAt: new Date().toISOString(), cliVersion: harnessVersion() })
+    }
+    atomicWriteFile(registryPath(H), JSON.stringify(reg, null, 2) + '\n', 0o600)
+    atomicWriteFile(receiptsPath(H), JSON.stringify(receipts, null, 2) + '\n', 0o600)
+    const record = JSON.parse(snapshots.get(path.join(H, 'provision.json')).bytes)
+    record.pins.plugins[pin.id] = { sha: pin.commit, resolvedSha: pin.commit, installedDir: fs.realpathSync(dest) }
+    atomicWriteFile(path.join(H, 'provision.json'), JSON.stringify(record, null, 2) + '\n', 0o600)
+    console.error('img2: installed ' + pin.id + ' at exact pin ' + pin.commit + '; continuing the same route request')
+  } catch (error) {
+    failed = true
+    const failures = []
+    if (activated) {
+      for (const [file, previous] of [...snapshots].reverse()) {
+        try {
+          if (previous?.link) { fs.rmSync(file, { force: true }); fs.symlinkSync(previous.link, file) }
+          else if (previous) atomicWriteFile(file, previous.bytes, previous.mode)
+          else fs.rmSync(file, { force: true })
+        } catch (rollback) { failures.push(file + ': ' + rollback.message) }
+      }
+      try { fs.rmSync(dest, { recursive: true, force: true }) } catch (rollback) { failures.push(rollback.message) }
+    }
+    if (failures.length) throw new CliError(EXIT.FAIL, 'plugin install failed and rollback was incomplete', failures.join('\n'))
+    throw error
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true })
+    if (failed) for (const dir of [...createdDirs].sort((a, b) => b.length - a.length)) {
+      try { fs.rmdirSync(dir) } catch (error) { if (!['ENOENT', 'ENOTEMPTY'].includes(error.code)) throw error }
+    }
+  }
+}
+
 
 // `img2 route <route.py args>` / `img2 core-run <script> <args>`: the one supported way to run the pinned core (bin/route.mjs).
 // Everything after the command name belongs to the core script, so stdout stays the router's own output.
 async function cmdCoreRun(kind, opts, args) {
   let prepared
   try {
-    prepared = prepareCoreRun({ kind, args, home: resolveImg2Home(opts.home) })
+    const home = resolveImg2Home(opts.home)
+    prepared = kind === 'route' ? await prepareRouteWithPlugins(home, args) : prepareCoreRun({ kind, args, home })
   } catch (e) {
     throw asCliError(e)
   }

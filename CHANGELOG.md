@@ -13,6 +13,15 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Fixed
 
+- Opted-in 3D requests can install a missing public producer from a versioned, commit/hash-bound
+  routing snapshot and continue the same request without a plugin name or separate install command.
+  Selection uses typed roles/observations, never object labels. Downloads verify exact Git pins and
+  route-card equality; concurrent requests serialize, and failed publication rolls back installation
+  metadata and links. Core execution authority, consent and terminal gates are unchanged.
+- Refresh the Interior candidate pin and bind its actual route card; this is branch integration,
+  not release or independent-review acceptance. Legacy locks remain readable but do not gain
+  automatic routing metadata implicitly.
+
 - Prepare harness **0.6.0**: setup probes the installed CLI's route interface and refuses obsolete
   installs before provisioning instead of reporting source-CLI behavior as installed capability.
 - Git transport preserves approved SSH, credential-helper, proxy and CA settings without trusting

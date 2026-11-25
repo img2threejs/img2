@@ -67,6 +67,7 @@ function installedFixture(t) {
   const sha = git(dir, ['rev-parse', 'HEAD'], sb.env)
   const pins = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins.lock.json'), 'utf8'))
   Object.assign(pins.plugins.find(p => p.id === 'cs2'), { commit: sha, pinState: 'on-origin' })
+  delete pins.plugins.find(p => p.id === 'cs2').routing // This setup-only fixture has no route card.
   // An installed core already at its pin keeps the offline repair path free of Git downloads.
   const core = path.join(sb.H, 'core')
   fs.mkdirSync(path.join(core, 'forge'), { recursive: true })

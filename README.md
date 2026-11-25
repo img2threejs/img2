@@ -120,6 +120,23 @@ its launcher hash differs, and then:
 - for `route`, add `--harness-root/--harness-sha/--harness-executable/--harness-sha256` from
   `provision.json` unless you passed them.
 
+With `install --auto-install` consent and an already valid runtime, a normal 3D route can add a
+missing public producer **before continuing the same request**. It matches typed proposal roles and
+observations against `plugins.lock.json` routing snapshots; no plugin flag or separate install
+command is needed for a matching card. Object labels/IDs never become package names or commands.
+The installed harness must be clean and setup-pinned. Its catalog validates the source, its lock
+selects one exact Git commit, and the fetched `route.json` must match both the recorded SHA-256 and
+card data. Missing/older routing metadata and unsupported runtimes refuse rather than guessing.
+The current Interior snapshot supports one enclosed room; the unconstrained CS2 card is not inferred
+from a name, and the old Character pin has no routing snapshot. Those are not implicit auto-install
+approvals. The core still makes all actual routing, permission, producer and terminal decisions.
+
+Concurrent requests serialize installation; an already installed exact clean pin is reused without
+fetching. An install publication error restores its previous registry/generated files, links and
+setup receipt. Local, dirty, foreign or differently pinned registrations are never replaced by this
+path. `IMG2_AUTO_INSTALL=0` or absence of the opt-in marker prevents automatic installation.
+Installer diagnostics go to stderr so stdout remains the original router response.
+
 It never grants consent or logs in. One summary line (paths, Pillow version, blender) goes to stderr;
 stdout is the router's. That file is what the
 core's `scripts/e2e/route_one.py --home "$IMG2_HOME"` reads, so a clean home can route without

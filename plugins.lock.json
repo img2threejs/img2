@@ -27,6 +27,24 @@
       "capability": "CS2 skin",
       "repo": "https://github.com/img2threejs/plugin-cs2",
       "commit": "ea41cb608ff5428cc34fba63b3c8e8b6049e2e03",
+      "routing": {
+        "schema": 1,
+        "commit": "ea41cb608ff5428cc34fba63b3c8e8b6049e2e03",
+        "routeCardSha256": "19adb783e9de31448f887eb2a7000d2d38bf14c986c9396f5217c38c0a2af82c",
+        "card": {
+          "kind": "img2.route-card",
+          "version": 1,
+          "outputKind": "spec-augmentation",
+          "requires": {},
+          "notFor": {},
+          "costClass": "local",
+          "deps": [{"probe": "python3>=3.10"}],
+          "display": {
+            "appliesTo": "CS2 weapon and glove skins requiring evidence-backed finish, wear and identity detail. Selection requests the CS2 profile only; independent authoritative classification can veto it. The augmentation is consumed by a base child that produces a 3D object.",
+            "notFor": "Look-alikes or items without authoritative CS2 classification. Routing probability, names and heuristic detection do not establish identity. No game assets are supplied; exact textures require separately acquired, legally usable evidence."
+          }
+        }
+      },
       "visibility": "public",
       "selectable": true,
       "default": true,
@@ -37,12 +55,33 @@
       "id": "interior",
       "capability": "interior scene",
       "repo": "https://github.com/img2threejs/plugin-interior",
-      "commit": "1d2f2a93713a2f7658822c89dcd305b136cc54e1",
+      "commit": "3d669f33a2d13e2e63831d399fdc1d458f365699",
+      "routing": {
+        "schema": 1,
+        "commit": "3d669f33a2d13e2e63831d399fdc1d458f365699",
+        "routeCardSha256": "a488301a65e404684c002e659ac0ae976b39a64671311177be629bc075fcde2f",
+        "card": {
+          "kind": "img2.route-card",
+          "version": 1,
+          "outputKind": "3d-scene",
+          "requires": {
+            "roles": ["scene-container"],
+            "observations": {"enclosure": ["enclosed-room"], "roomCount": [1]}
+          },
+          "notFor": {"observations": {"roomCount": [">1"]}},
+          "costClass": "heavy",
+          "deps": [{"probe": "interior-bpy>=4.3"}],
+          "display": {
+            "appliesTo": "One enclosed room authored as metric Blender geometry with PBR, bake/probe, runtime GLB and an independently measured composition handoff. Separately routed exact component identities are removed before native authoring is saved or baked.",
+            "notFor": "Multiple rooms, open environments, standalone objects, rigging, explicit 2D, or unknown room count. This 0.3.2 adapter does not include the unreleased 0.4 house/schema-3 pipeline. Artifact production is not visual or gate acceptance."
+          }
+        }
+      },
       "visibility": "public",
       "selectable": true,
       "default": true,
       "pinState": "on-origin",
-      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
+      "note": "candidate is origin/feat/jev-four-decisions HEAD (git ls-remote verified before this pin update); independent review and full integration remain pending, not a release acceptance"
     },
     {
       "id": "jev",

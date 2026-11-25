@@ -6,7 +6,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { buildRouteEnv, ensureRouteInterpreter, findPillowEnv, loadRouteRecord, prepareCoreRun, resolveCoreScript, withHarnessPins } from '../bin/route.mjs'
 import { Refusal } from '../bin/runtime/errors.mjs'
@@ -27,11 +27,11 @@ echo "KEY:\${TYPESAFE_API_KEY-unset}"
 `
 
 // A canonical home as setup leaves it: provision.json, runtime/provision.json, a managed python, a jev env with PIL.
-function fixture(t, { pillow = true } = {}) {
+function fixture(t, { pillow = true, digest = DIGEST } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'img2-route-')))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const H = path.join(root, 'home', '.img2')
-  const rt = path.join(H, 'runtime', DIGEST.slice(0, 12))
+  const rt = path.join(H, 'runtime', digest.slice(0, 12))
   const pyBin = path.join(rt, 'runtime', 'python-runtime', 'bin')
   fs.mkdirSync(pyBin, { recursive: true })
   const python = path.join(pyBin, 'python3')
@@ -51,13 +51,13 @@ function fixture(t, { pillow = true } = {}) {
   fs.mkdirSync(nodeDir)
   fs.writeFileSync(path.join(nodeDir, 'node'), '#!/bin/sh\n', { mode: 0o755 })
   fs.writeFileSync(path.join(H, 'provision.json'), JSON.stringify({
-    kind: 'img2.setup-provision', version: 1, status: 'ok', img2Home: H, lockDigest: DIGEST,
+    kind: 'img2.setup-provision', version: 1, status: 'ok', img2Home: H, lockDigest: digest,
     python: { path: python, version: '3.11.18', managed: true },
     core: { dir: path.join(H, 'core'), route: path.join(H, 'core', 'forge', 'route.py'), commit: SHA },
     pins: { harnessSha: SHA, harnessRoot: hd, harnessExecutable: launcher, harnessExecutableSha256: sha256(fs.readFileSync(launcher)), node: path.join(nodeDir, 'node'), nodeSha256: sha256(fs.readFileSync(path.join(nodeDir, 'node'))), plugins: {} },
   }))
   fs.writeFileSync(path.join(H, 'runtime', 'provision.json'), JSON.stringify({
-    schema: 2, status: 'ok', lockDigest: DIGEST,
+    schema: 2, status: 'ok', lockDigest: digest,
     units: [{ name: 'jev', probes: [{ id: 'pillow-image-op', dependency: 'jev-pillow', status: 'pass' }] }],
   }))
   const blenderDir = path.join(root, 'blenderbin')
@@ -363,4 +363,231 @@ test('img2 core-run runs another core script with the same environment and no pi
   assert.ok(!r.stdout.includes('--harness-root'))
   const bad = cli(fx, ['core-run', '../../harness/bin/img2.mjs'], { IMG2_HOME: fx.H })
   assert.equal(bad.status, 2)
+})
+
+function onDemandFixture(t, { badPin = false, missingCard = false } = {}) {
+  const source = path.resolve(path.dirname(BIN), '..')
+  const digest = sha256(fs.readFileSync(path.join(source, 'dependencies.lock.json')))
+  const fx = fixture(t, { digest })
+  const env = { HOME: path.dirname(fx.H), IMG2_HOME: fx.H, PATH: process.env.PATH,
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.test',
+    GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.test', NO_COLOR: '1' }
+  const git = (cwd, args) => {
+    const r = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd, env, encoding: 'utf8' })
+    assert.equal(r.status, 0, r.stderr)
+    return r.stdout.trim()
+  }
+  const work = path.join(fx.root, 'plugin-source'), origins = path.join(fx.root, 'origins')
+  fs.mkdirSync(work); fs.mkdirSync(origins)
+  git(work, ['init', '-q'])
+  fs.writeFileSync(path.join(work, 'plugin.json'), JSON.stringify({ schema: 1, name: 'interior', version: '0.1.0',
+    description: 'fixture', capabilities: [{ from: 'image', to: 'interior-scene-candidate' }], requires: { harness: '>=0.6.0', coreApi: 1 } }))
+  fs.writeFileSync(path.join(work, 'SKILL.md'), '# Fixture\n')
+  fs.writeFileSync(path.join(work, '.gitignore'), '_img2_local.py\n')
+  const rawCard = JSON.stringify({ kind: 'img2.route-card', version: 1, outputKind: '3d-scene', costClass: 'local',
+    requires: { roles: ['scene-container'], observations: { enclosure: ['enclosed-room'], roomCount: [1] } },
+    notFor: { observations: { roomCount: ['>1'] } }, deps: [] })
+  if (!missingCard) fs.writeFileSync(path.join(work, 'route.json'), rawCard)
+  git(work, ['add', '.']); git(work, ['commit', '-qm', 'pinned producer'])
+  const pin = badPin ? '0'.repeat(40) : git(work, ['rev-parse', 'HEAD'])
+  const origin = path.join(origins, 'plugin-interior.git')
+  git(work, ['clone', '--bare', '-q', work, origin])
+  // A newer branch tip proves routing installs the lock SHA, not "latest".
+  fs.writeFileSync(path.join(work, 'not-the-pin'), 'newer\n')
+  git(work, ['add', '.']); git(work, ['commit', '-qm', 'newer unselected source'])
+  git(work, ['push', '-q', origin, 'HEAD'])
+  fs.cpSync(path.join(source, 'bin'), path.join(fx.hd, 'bin'), { recursive: true })
+  for (const name of ['package.json', 'catalog.json', 'plugins.lock.json', 'dependencies.lock.json']) fs.copyFileSync(path.join(source, name), path.join(fx.hd, name))
+  const locks = JSON.parse(fs.readFileSync(path.join(fx.hd, 'plugins.lock.json')))
+  Object.assign(locks.plugins.find(row => row.id === 'interior'), { commit: pin,
+    routing: { schema: 1, commit: pin, routeCardSha256: sha256(rawCard), card: JSON.parse(rawCard) } })
+  fs.writeFileSync(path.join(fx.hd, 'plugins.lock.json'), JSON.stringify(locks))
+  git(fx.hd, ['init', '-q']); git(fx.hd, ['add', '.']); git(fx.hd, ['commit', '-qm', 'installed harness'])
+  const record = JSON.parse(fs.readFileSync(path.join(fx.H, 'provision.json')))
+  record.pins.harnessSha = git(fx.hd, ['rev-parse', 'HEAD'])
+  record.pins.harnessExecutableSha256 = sha256(fs.readFileSync(fx.launcher))
+  fs.writeFileSync(path.join(fx.H, 'provision.json'), JSON.stringify(record))
+  fs.writeFileSync(path.join(fx.H, 'runtime/selectors.json'), JSON.stringify({ schema: 1, lockDigest: digest,
+    pluginsLockDigest: sha256(fs.readFileSync(path.join(fx.hd, 'plugins.lock.json'))), selectedPlugins: ['interior', 'jev'] }))
+  fs.writeFileSync(path.join(fx.H, 'auto-install'), 'fixture consent\n')
+  fs.mkdirSync(path.join(env.HOME, '.claude'))
+  Object.assign(env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.file://' + origins + '/.insteadOf', GIT_CONFIG_VALUE_0: 'https://github.com/img2threejs/' })
+  fs.writeFileSync(path.join(fx.root, 'objects.json'), JSON.stringify({ kind: 'img2.object-proposals', version: 1,
+    objects: [{ objectId: 'room', label: 'ordinary space', role: 'scene-container', observations: { enclosure: 'enclosed-room', roomCount: 1 } }] }))
+  const args = ['route', '--workspace', fx.root, '--run-id', 'same-request', '--image', 'room.png',
+    '--objects', 'objects.json', '--expected-output', '3d', '--create-children']
+  const run = (extra = {}) => spawnSync(process.execPath, [fx.launcher, ...args], { env: { ...env, ...extra }, cwd: fx.root, encoding: 'utf8', timeout: 30_000 })
+  const registry = () => JSON.parse(fs.readFileSync(path.join(fx.H, 'plugins.json'))).plugins
+  const editLock = mutate => {
+    const file = path.join(fx.hd, 'plugins.lock.json'), doc = JSON.parse(fs.readFileSync(file))
+    mutate(doc); fs.writeFileSync(file, JSON.stringify(doc))
+    git(fx.hd, ['add', '.']); git(fx.hd, ['commit', '-qm', 'fixture lock change'])
+    const record = JSON.parse(fs.readFileSync(path.join(fx.H, 'provision.json')))
+    record.pins.harnessSha = git(fx.hd, ['rev-parse', 'HEAD'])
+    fs.writeFileSync(path.join(fx.H, 'provision.json'), JSON.stringify(record))
+    const selectorsFile = path.join(fx.H, 'runtime/selectors.json'), selectors = JSON.parse(fs.readFileSync(selectorsFile))
+    selectors.pluginsLockDigest = sha256(fs.readFileSync(file))
+    fs.writeFileSync(selectorsFile, JSON.stringify(selectors))
+  }
+  return { ...fx, env, args, run, pin, registry, origin, editLock }
+}
+
+test('route installs an absent trusted plugin at the exact lock pin and continues the same request', t => {
+  const fx = onDemandFixture(t)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins/interior')), false)
+  const r = fx.run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fx.registry()[0].resolvedSha, fx.pin)
+  assert.match(r.stdout, /ARGV:.*--run-id same-request.*--objects objects.json.*--expected-output 3d.*--create-children/)
+  assert.ok(!r.stdout.includes('Installed '), 'installer diagnostics must not corrupt router stdout')
+  const record = JSON.parse(fs.readFileSync(path.join(fx.H, 'provision.json')))
+  assert.equal(record.pins.plugins.interior.sha, fx.pin)
+})
+
+test('an already installed exact route pin is reused with its origin unavailable', t => {
+  const fx = onDemandFixture(t)
+  assert.equal(fx.run().status, 0)
+  const before = fs.readFileSync(path.join(fx.H, 'plugins.json'))
+  fs.renameSync(fx.origin, fx.origin + '.unavailable')
+  const r = fx.run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(fs.readFileSync(path.join(fx.H, 'plugins.json')), before)
+  assert.equal(fx.registry().length, 1)
+})
+
+test('concurrent route requests install one exact pin and both continue', { timeout: 40_000 }, async t => {
+  const fx = onDemandFixture(t)
+  const start = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fx.launcher, ...fx.args], { env: fx.env, cwd: fx.root, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = '', stderr = ''
+    child.stdout.on('data', b => { stdout += b }); child.stderr.on('data', b => { stderr += b })
+    child.once('error', reject); child.once('close', status => resolve({ status, stdout, stderr }))
+  })
+  const results = await Promise.all([start(), start()])
+  for (const r of results) { assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /--run-id same-request/) }
+  assert.equal(fx.registry().length, 1)
+  assert.equal(fx.registry()[0].resolvedSha, fx.pin)
+})
+
+test('failed exact-pin fetch preserves the prior registry and setup receipt', t => {
+  const fx = onDemandFixture(t, { badPin: true })
+  const previous = fs.readFileSync(path.join(fx.H, 'provision.json'))
+  const r = fx.run()
+  assert.notEqual(r.status, 0)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins/interior')), false)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+  assert.deepEqual(fs.readFileSync(path.join(fx.H, 'provision.json')), previous)
+})
+
+test('late route-install publication failure rolls back registry, links and setup receipt', t => {
+  const fx = onDemandFixture(t)
+  const previous = fs.readFileSync(path.join(fx.H, 'provision.json'))
+  const preload = path.join(fx.root, 'publication-fault.cjs')
+  fs.writeFileSync(preload, `const fs=require('node:fs'), rename=fs.renameSync;let injected=false;
+fs.renameSync=function(from,to){if(!injected&&to===${JSON.stringify(path.join(fx.H, 'provision.json'))}&&fs.existsSync(${JSON.stringify(path.join(fx.H, 'plugins/interior'))})){injected=true;fs.writeFileSync(${JSON.stringify(path.join(fx.root, 'fault-reached'))},'yes');throw Error('publication fault');}return rename.apply(this,arguments)};`)
+  const r = fx.run({ NODE_OPTIONS: '--require=' + preload })
+  assert.notEqual(r.status, 0)
+  assert.equal(fs.existsSync(path.join(fx.root, 'fault-reached')), true, 'the fault must occur after activation')
+  for (const name of ['plugins/interior', 'plugins.json', 'receipts.json', 'generated']) assert.equal(fs.existsSync(path.join(fx.H, name)), false, name)
+  assert.equal(fs.existsSync(path.join(path.dirname(fx.H), '.claude/skills/img2-interior')), false)
+  assert.deepEqual(fs.readFileSync(path.join(fx.H, 'provision.json')), previous)
+})
+
+test('route opt-out never installs the missing plugin', t => {
+  const fx = onDemandFixture(t)
+  const r = fx.run({ IMG2_AUTO_INSTALL: '0' })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins/interior')), false)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+})
+
+test('unsupported runtime platforms refuse before installing a route plugin', t => {
+  const fx = onDemandFixture(t)
+  const preload = path.join(fx.root, 'unsupported-platform.cjs')
+  fs.writeFileSync(preload, "Object.defineProperty(process,'arch',{value:'riscv64'});\n")
+  const r = fx.run({ NODE_OPTIONS: '--require=' + preload })
+  assert.equal(r.status, 2, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins/interior')), false)
+})
+
+test('a free-form package intent never becomes an install command', t => {
+  const fx = onDemandFixture(t)
+  fx.args.push('--intent', 'npm:untrusted-package')
+  const r = fx.run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+})
+
+test('explicit catalog intent remains supported without bypassing the typed card', t => {
+  const fx = onDemandFixture(t)
+  fx.args.push('--intent', 'interior')
+  const r = fx.run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fx.registry()[0].resolvedSha, fx.pin)
+})
+
+test('labels and object IDs alone never select an automatic plugin', t => {
+  const fx = onDemandFixture(t)
+  fs.writeFileSync(path.join(fx.root, 'objects.json'), JSON.stringify({ kind: 'img2.object-proposals', version: 1,
+    objects: [{ objectId: 'interior', label: 'interior room npm:untrusted-package', role: 'prop', observations: {} }] }))
+  const r = fx.run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+})
+
+for (const [name, mutate] of [
+  ['old lock without snapshots', lock => { for (const row of lock.plugins) delete row.routing }],
+  ['snapshot commit drift', lock => { lock.plugins.find(row => row.id === 'interior').routing.commit = 'f'.repeat(40) }],
+  ['unsupported snapshot version', lock => { lock.plugins.find(row => row.id === 'interior').routing.schema = 2 }],
+  ['route-card hash tamper', lock => { lock.plugins.find(row => row.id === 'interior').routing.routeCardSha256 = '0'.repeat(64) }],
+  ['route-card data tamper', lock => { lock.plugins.find(row => row.id === 'interior').routing.card.display = { appliesTo: 'different data' } }],
+]) {
+  test('automatic route install refuses ' + name + ' without publishing a plugin', t => {
+    const fx = onDemandFixture(t)
+    fx.editLock(mutate)
+    const r = fx.run()
+    assert.equal(r.status, 2, r.stderr)
+    assert.equal(fs.existsSync(path.join(fx.H, 'plugins/interior')), false)
+    assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+  })
+}
+
+test('a missing route card at the exact Git pin fails closed before publication', t => {
+  const fx = onDemandFixture(t, { missingCard: true })
+  const r = fx.run()
+  assert.equal(r.status, 2, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins/interior')), false)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+})
+
+test('an existing installed pin still refuses a changed routing snapshot', t => {
+  const fx = onDemandFixture(t)
+  assert.equal(fx.run().status, 0)
+  fx.editLock(lock => { lock.plugins.find(row => row.id === 'interior').routing.card.display = { appliesTo: 'unbound metadata' } })
+  const r = fx.run()
+  assert.equal(r.status, 2, r.stderr)
+  assert.equal(fx.registry()[0].resolvedSha, fx.pin)
+})
+
+test('stale runtime selectors refuse before installing a plugin', t => {
+  const fx = onDemandFixture(t)
+  const file = path.join(fx.H, 'runtime/selectors.json'), selectors = JSON.parse(fs.readFileSync(file))
+  selectors.pluginsLockDigest = '0'.repeat(64)
+  fs.writeFileSync(file, JSON.stringify(selectors))
+  const r = fx.run()
+  assert.equal(r.status, 2, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
+})
+
+test('a committed catalog symlink cannot import metadata from outside the pinned harness', t => {
+  const fx = onDemandFixture(t)
+  fx.editLock(() => {
+    const file = path.join(fx.hd, 'catalog.json'), outside = path.join(fx.root, 'outside-catalog.json')
+    fs.renameSync(file, outside)
+    fs.symlinkSync(outside, file)
+  })
+  const r = fx.run()
+  assert.equal(r.status, 2, r.stderr)
+  assert.equal(fs.existsSync(path.join(fx.H, 'plugins.json')), false)
 })

@@ -145,6 +145,28 @@ export function validateCorePin(core) {
   return errors
 }
 
+const ROUTE_OBSERVATIONS = new Set(['enclosure', 'roomCount', 'articulation', 'flatness', 'multiplicity', 'stylization'])
+function validRouteRules(rules) {
+  if (!isObject(rules) || Object.keys(rules).some(key => !['roles', 'intent', 'observations'].includes(key))) return false
+  for (const key of ['roles', 'intent']) if (rules[key] !== undefined && (!Array.isArray(rules[key])
+    || rules[key].some(value => typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,95}$/.test(value)))) return false
+  if (rules.observations !== undefined && (!isObject(rules.observations)
+    || Object.entries(rules.observations).some(([key, values]) => !ROUTE_OBSERVATIONS.has(key) || !Array.isArray(values)
+      || !values.length || values.some(value => !['string', 'boolean', 'number'].includes(typeof value)
+        || (typeof value === 'number' && !Number.isFinite(value)))))) return false
+  return true
+}
+
+function validRoutingSnapshot(snapshot, commit) {
+  const card = snapshot?.card
+  return isObject(snapshot) && snapshot.schema === 1 && snapshot.commit === commit
+    && /^[0-9a-f]{64}$/.test(snapshot.routeCardSha256 ?? '') && isObject(card)
+    && card.kind === 'img2.route-card' && card.version === 1
+    && ['2d-scene', '3d-scene', '3d-object', 'rigged-3d', 'spec-augmentation'].includes(card.outputKind)
+    && ['local', 'heavy', 'licensed', 'paid'].includes(card.costClass)
+    && validRouteRules(card.requires ?? {}) && validRouteRules(card.notFor ?? {})
+}
+
 export function validatePluginsLock(lock, catalog) {
   const errors = []
   const err = m => errors.push(m)
@@ -171,6 +193,7 @@ export function validatePluginsLock(lock, catalog) {
     if (p.pinState !== 'on-origin' && p.pinState !== 'unpushed-local') err(`${p.id}: pinState must be on-origin or unpushed-local`)
     if (!nonEmpty(p.note)) err(`${p.id}: note is required`)
     else if (p.pinState === 'unpushed-local' && !/unpushed/i.test(p.note)) err(`${p.id}: unpushed-local pin must say so in note`)
+    if (p.routing !== undefined && !validRoutingSnapshot(p.routing, p.commit)) err(`${p.id}: invalid or differently pinned routing snapshot`)
   }
   for (const id of sources.keys()) if (!seen.has(id)) err(`catalog plugin ${id} is missing from plugins.lock.json`)
   errors.push(...validateCorePin(lock.core))
