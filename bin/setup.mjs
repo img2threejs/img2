@@ -12,18 +12,19 @@ import { cleanEnv } from './runtime/exec.mjs'
 import { childEnv } from './runtime/child-env.mjs'
 
 export const SETUP_PLUGINS = [
-  { id: 'character', description: 'Rigged characters, skin conditioning and animation.' },
-  { id: 'cs2', description: 'Counter-Strike 2 weapon and glove skins.' },
-  { id: 'interior', description: 'Textured interior scenes, Blender/PBR and GLB delivery.' },
-  { id: 'jev', description: 'Image-aware routing and bounded decision advice.' },
-  { id: 'pixi2d', description: 'Editable 2D reference reconstruction in PixiJS.' },
+  { id: 'character', default: true, description: 'Rigged characters, skin conditioning and animation.' },
+  { id: 'cs2', default: true, description: 'Counter-Strike 2 weapon and glove skins.' },
+  { id: 'interior', default: true, description: 'Textured interior scenes, Blender/PBR and GLB delivery.' },
+  { id: 'jev', default: false, description: 'Optional paid image-aware routing and bounded decision advice (opt-in).' },
+  { id: 'pixi2d', default: true, description: 'Editable 2D reference reconstruction in PixiJS.' },
 ]
 const allIds = () => SETUP_PLUGINS.map(p => p.id)
+const defaultIds = () => SETUP_PLUGINS.filter(p => p.default).map(p => p.id)
 
 export function parseSetupSelection(answer) {
   if (answer === null || answer === undefined) throw new Refusal('plugin selection cancelled; nothing was changed', undefined, 3)
   const text = String(answer).trim()
-  if (!text) return allIds()
+  if (!text) return defaultIds()
   const requested = text.split(',').map(s => s.trim())
   if (requested.some(id => !allIds().includes(id))) {
     throw new Refusal('invalid plugin selection: ' + text, 'expected comma-separated names: ' + allIds().join(', '))
@@ -46,9 +47,8 @@ export async function selectSetupPlugins(opts, { isTTY = !!process.stdin.isTTY, 
     if (!String(opts.plugins).trim()) throw new Refusal('--plugins needs at least one plugin name')
     return parseSetupSelection(opts.plugins)
   }
-  if (opts.minimal) return ['jev']
-  if (opts.yes || !isTTY) return allIds()
-  return parseSetupSelection(await ask('Install plugins (Enter = all; or comma-separated names): '))
+  if (opts.minimal || opts.yes || !isTTY) return defaultIds()
+  return parseSetupSelection(await ask('Install plugins (Enter = character,cs2,interior,pixi2d; Jev opt-in; or comma-separated names): '))
 }
 
 // Plugin tools (Jev auth-status, its login hint) use annotations such as `float | int` that need CPython >= 3.10.
@@ -166,8 +166,8 @@ export async function runSetup(opts, home, deps) {
   }
   try {
     if (isTTY && !opts.yes && !opts.minimal && opts.plugins == null) {
-      out('Choose plugins (all selected by default):')
-      for (const plugin of SETUP_PLUGINS) out('  [x] ' + plugin.id + ' - ' + plugin.description)
+      out('Choose plugins (four domain plugins selected by default; Jev is opt-in):')
+      for (const plugin of SETUP_PLUGINS) out('  [' + (plugin.default ? 'x' : ' ') + '] ' + plugin.id + ' - ' + plugin.description)
     }
     const selected = await selectSetupPlugins(opts, { isTTY, ask: deps.ask })
     rows = selected.map(id => ({ id, ref: null, next: 'Rerun img2 setup to repair/resume' }))
@@ -260,16 +260,13 @@ export async function runSetup(opts, home, deps) {
       const status = await checkJevAuth(home, runtimeDeps, python.path)
       if (status === 'missing') {
         jev.next = loginCommand(home, python.path)
-        summary()
-        out('Jev credential missing. Run this exact login command in your own terminal (TTY required; setup never handles the key):')
+        out('Optional Jev credential missing. To opt in to Jev routing, run this exact login command in your own terminal (TTY required; setup never handles the key):')
         out(jev.next)
-        if (deps.core) { out('Then route an image (img2 route sets the interpreter, PATH, IMG2_HOME and harness pins; consent is still yours to grant):'); out(routeCommand(home)) }
-        return 3
       }
-      jev.next = 'Review workspace image-disclosure and paid-call consent before routing'
+      else jev.next = 'Optional Jev routing: review workspace image-disclosure and paid-call consent before using --decider jev'
     }
     summary()
-    if (deps.core) { out('Route an image with the core router (img2 route sets the interpreter, PATH, IMG2_HOME and harness pins; consent is still yours to grant):'); out(routeCommand(home)) }
+    if (deps.core) { out('Route an image with your host agent/model (no Jev account required; img2 route sets the interpreter, PATH, IMG2_HOME and harness pins):'); out(routeCommand(home)) }
     out('Setup complete. Re-run img2 setup with the same selection to verify and repair.')
     return 0
   } catch (error) {

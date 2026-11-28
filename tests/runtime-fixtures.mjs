@@ -144,7 +144,7 @@ export function makeFixture({ mutate } = {}) {
     schema: 1, defaultInstall: 'all',
     core: { id: 'core', repo: 'https://github.com/img2threejs/img2threejs', commit: 'c'.repeat(40), branch: 'main', pinState: 'on-origin', note: 'fixture' },
     plugins: ['character', 'cs2', 'interior', 'jev', 'pixi2d'].map((id) => ({
-      id, capability: id, selectable: true, default: true, repo: 'https://github.com/img2threejs/plugin-' + id,
+      id, capability: id, selectable: true, default: id !== 'jev', repo: 'https://github.com/img2threejs/plugin-' + id,
       commit: sha256(Buffer.from(id)).slice(0, 40), visibility: 'public', pinState: 'on-origin', note: 'fixture',
     })),
   }

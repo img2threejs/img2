@@ -2,9 +2,9 @@
 
 **img2threejs turns a reference image into a textured, realistic 3D GLB.** `img2` is the plugin
 harness behind it: it installs the domain plugins, the shared runtime they need (Blender `bpy`,
-Chromium/Playwright, Three.js, vision models, CS2 tools, MCP servers) and the **Jev** routing
-plugin, which gives bounded advice on *which plugin should handle your image*. Jev advises and
-repairs; it is never the acceptance authority. Acceptance stays with each plugin's own gates.
+Chromium/Playwright, Three.js, vision models, CS2 tools, MCP servers). Ordinary routing uses your
+current host agent/model, without a Jev plugin, account or interactive terminal. The optional **Jev**
+plugin provides paid bounded routing and repair advice; acceptance stays with each plugin's own gates.
 
 The harness itself ships no domain capability: everything is a plugin. It owns install/link
 plumbing, the plugin registry, the workspace state envelope, the gate runner, and the contract.
@@ -37,14 +37,14 @@ runtime and audits the result.
 | `jev` | Bounded image-aware routing and repair advisories to the right plugin; never acceptance authority | Public |
 | `pixi2d` | Explicit 2D image reconstruction in PixiJS with editable nodes and a blocking review gate | Public |
 
-Choose a plugin set at the prompt (Enter = all five, or a comma list such as `cs2,jev`), or skip
+Choose a plugin set at the prompt (Enter = `character,cs2,interior,pixi2d`; Jev is opt-in), or skip
 the prompt with flags:
 
 ```bash
-img2 setup                                  # prompt: Enter = all, or a comma list: cs2,jev
-img2 setup --plugins cs2,jev                # explicit list; skips the prompt
-img2 setup --minimal                        # jev only (see below)
-img2 setup --yes                            # all five, no prompt
+img2 setup                                  # Enter = four domain plugins, without Jev
+img2 setup --plugins cs2,jev                # explicit list including optional Jev; skips the prompt
+img2 setup --minimal                        # same four-domain-plugin default bundle (see below)
+img2 setup --yes                            # four domain plugins, no prompt
 img2 setup --strict-hash                    # refuse hash-weak downloads (default: accept and record)
 img2 setup --skip cs2-dotnet-runtime        # disable a dependency (repeatable)
 img2 setup --offline                        # no network; see below
@@ -55,12 +55,12 @@ Setup flags are only `--yes`, `--plugins`, `--minimal`, `--home`, `--from` (a lo
 source), `--strict-hash`, `--skip` and `--offline` (`--allow-weak-hash` is still accepted; it is the default).
 
 - **Selection precedence:** explicit `--plugins` beats `--minimal`, which beats `--yes`. The prompt
-  accepts Enter (all) or a comma-separated list of the IDs above; duplicates collapse, and unknown
-  or empty list items are refused. With no TTY and no flags, setup selects all five without
-  asking. An empty `--plugins` value is refused.
-- **`--minimal` here means “Jev only.”** It installs just `jev` but still provisions the full
-  shared routing runtime. It is **not** the `img2 provision --minimal` profile, which drops
-  vision, MCP servers and extra browsers.
+  accepts Enter (the four domain plugins) or a comma-separated list of the IDs above; duplicates collapse,
+  and unknown or empty list items are refused. With no TTY and no flags, setup selects the same four
+  without asking. An empty `--plugins` value is refused. Select `--plugins jev` explicitly to install Jev.
+- **`--minimal` selects the same no-Jev default bundle**, with the full runtime profile for those
+  plugins. It does not introduce a core-only install. It is **not** the `img2 provision --minimal`
+  runtime profile, which drops vision, MCP servers and extra browsers.
 - **Hash-weak entries are accepted by default.** The lock pins some entries only by MD5/CRC32C, git
   SHA-1 or a GCS generation (Playwright browser bundles from the CDN, model configs). `setup` proceeds,
   records a locally computed SHA-256 in `runtime/provision.json` and prints one `Notice:` line with the
@@ -94,12 +94,12 @@ source), `--strict-hash`, `--skip` and `--offline` (`--allow-weak-hash` is still
    character and interior are selected), browsers, Three, vision, CS2 tools and MCP servers.
 5. `doctor` (static installation audit).
 6. `doctor --runtime` (proves each runtime piece works).
-7. Jev credential status (`jev.py auth-status`, local-only, run with the provisioned Python), with the
-   login command as the next step when no credential is present.
+7. Only when Jev was explicitly selected: its credential status (`jev.py auth-status`, local-only,
+   run with the provisioned Python), with an opt-in login hint when no credential is present.
 
 After step 6 setup writes `$IMG2_HOME/provision.json` (harness commit and launcher SHA-256, node, the
-installed plugin dirs, core path, interpreter) and prints the `img2 route` command (plus the Jev login
-command while no credential is enrolled).
+installed plugin dirs, core path, interpreter) and prints the normal host-model `img2 route` command.
+When Jev was explicitly selected but has no credential, setup also prints its optional login command and succeeds.
 
 #### Running the core: `img2 route` / `img2 core-run`
 
@@ -119,6 +119,27 @@ its launcher hash differs, and then:
   neither a venv symlink nor `PYTHONPATH` can supply Pillow;
 - for `route`, add `--harness-root/--harness-sha/--harness-executable/--harness-sha256` from
   `provision.json` unless you passed them.
+
+Ordinary routing uses core's `--decider model` default. The harness forwards arguments unchanged;
+it does not answer questions or choose a model itself:
+
+```bash
+img2 route --workspace WORKSPACE --run-id RUN_ID --image IMAGE --objects OBJECTS.json
+img2 route --workspace WORKSPACE --run-id RUN_ID --image IMAGE --objects OBJECTS.json \
+  --decider model --model-id HOST_MODEL_ID --token-budget 256000
+# Answer the core's questions with your actual host model, then resume with its typed answer file:
+img2 route --workspace WORKSPACE --run-id RUN_ID --image IMAGE --objects OBJECTS.json \
+  --decider model --model-id HOST_MODEL_ID --token-budget 256000 --model-answers ANSWERS.json
+```
+
+3D routing requires object proposals via `--objects OBJECTS.json`. Only explicit 2D routing
+(`--expected-output 2d`) can omit object proposals.
+
+Missing answers produce `questions-ready` with a `questionsRef`, not a Jev login requirement.
+No concrete model ID is invented when `--model-id` is omitted; core uses the logical `host-agent`
+selector. Answers must match the core's bound request/context. To opt in to paid Jev routing,
+explicitly pass `--decider jev`; its credentials, release pins and disclosure/paid-call consent
+remain required. Provisioning, integrity checks and native delivery gates are unchanged.
 
 With `install --auto-install` consent and an already valid runtime, a normal 3D route can add a
 missing public producer **before continuing the same request**. It matches typed proposal roles and
@@ -162,10 +183,10 @@ code.
   disk are additional and platform-dependent; run `img2 provision --plan` (it writes nothing) for
   the breakdown on your machine.
 
-### Jev login (the next step after setup)
+### Optional Jev login
 
-Setup never logs in and never reads, stores or prints your API key. If Jev has no credential, setup
-prints the exact next command and exits 3:
+Setup never logs in and never reads, stores or prints your API key. If you explicitly selected Jev
+and it has no credential, setup prints the exact opt-in login command and still succeeds:
 
 ```bash
 IMG2_HOME="${IMG2_HOME:-$HOME/.img2}"
@@ -195,10 +216,10 @@ then follow the instructions of the plugin you want to use.
 
 | Code | Meaning |
 |---|---|
-| 0 | Installed and verified; Jev credential present (or Jev not selected) |
+| 0 | Installed and verified; missing optional Jev credentials do not block success or host-model routing |
 | 1 | A step failed (including unreachable Git), or Jev auth status is unavailable/malformed |
 | 2 | Refused: invalid options, unsupported platform, protected local/dirty/foreign checkout, unmet offline preconditions or missing hash consent. Earlier completed steps are retained. |
-| 3 | Interactive input ended (EOF), or Jev login is still pending |
+| 3 | Interactive input ended (EOF), or a required setup step requested input |
 
 ### Re-running, repair and refusals
 
@@ -365,7 +386,7 @@ MCP servers) from `dependencies.lock.json` into `$IMG2_HOME/runtime/`:
 
 ```bash
 img2 provision --plan            # sizes per environment; writes nothing
-img2 provision                   # one confirmation (default yes); --yes skips it
+img2 provision                   # default:true plugins only (four domains, no Jev); one confirmation, --yes skips it
 img2 provision --minimal         # provision profile: no vision, MCP servers or extra browsers (not `setup --minimal`)
 img2 provision --plugins character,jev --skip cs2-dotnet-runtime
 img2 doctor --runtime            # proves each piece works; non-zero exit on any failure

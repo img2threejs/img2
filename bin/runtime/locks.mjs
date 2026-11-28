@@ -189,7 +189,7 @@ export function validatePluginsLock(lock, catalog) {
     if (!COMMIT.test(p.commit ?? '')) err(`${p.id}: commit must be a 40-hex SHA`)
     if (p.visibility !== row.access) err(`${p.id}: visibility ${p.visibility} must match catalog access ${row.access}`)
     if (typeof p.selectable !== 'boolean') err(`${p.id}: selectable must be boolean`)
-    if (p.default !== true) err(`${p.id}: default must be true`)
+    if (typeof p.default !== 'boolean') err(`${p.id}: default must be boolean`)
     if (p.pinState !== 'on-origin' && p.pinState !== 'unpushed-local') err(`${p.id}: pinState must be on-origin or unpushed-local`)
     if (!nonEmpty(p.note)) err(`${p.id}: note is required`)
     else if (p.pinState === 'unpushed-local' && !/unpushed/i.test(p.note)) err(`${p.id}: unpushed-local pin must say so in note`)

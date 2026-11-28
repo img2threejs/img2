@@ -13,6 +13,17 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ### Fixed
 
+- Default/Enter/`--yes`/non-TTY setup now selects `character,cs2,interior,pixi2d`; Jev is opt-in.
+  Setup `--minimal` selects that same bundle with the full runtime profile, not a core-only install.
+  Bare provisioning respects plugin `default` flags; runtime doctor uses the recorded selection.
+  Explicitly selected Jev without credentials prints an opt-in login hint while setup succeeds and
+  advertises normal host-model routing. Provisioning, integrity and auth-storage errors still fail.
+  `route` forwards core `--decider model|jev`, `--model-id`, `--model-answers` and `--token-budget`
+  unchanged; host answers and routing decisions remain entirely in core, never in JavaScript.
+- Synchronize fetchable candidate pins for optional-Jev Core, clean synthetic Character,
+  the frozen-policy CS2 fixture, Interior's harness 0.6.0 contract, Jev 0.5.0 and
+  Pixi2D's explicit Apache-2.0 source license. Routing snapshots use the same producer
+  commits as their installation pins; candidate integration is not a main-branch release.
 - Opted-in 3D requests can install a missing public producer from a versioned, commit/hash-bound
   routing snapshot and continue the same request without a plugin name or separate install command.
   Selection uses typed roles/observations, never object labels. Downloads verify exact Git pins and
@@ -53,18 +64,18 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   user's `blender`) first on `PATH`, a copied route interpreter that sees only the verified Pillow env, and
   the harness pins from `provision.json`. Fixes acceptance round-2 N1 (no Pillow under the managed Python),
   N2 (probes need the managed Python first on `PATH`) and N3 (non-canonical `IMG2_HOME`). Setup prints the
-  `img2 route` command and, while no credential is enrolled, the Jev login command.
+  `img2 route` command; a Jev login hint is printed only when Jev was explicitly selected.
 - The core skill is pinned in `plugins.lock.json` (`core`, validated by `validateCorePin`), checked out by
   `img2 install` (skip with `--no-core`) and `img2 setup` at `$IMG2_HOME/core`, linked into hosts as
   `img2threejs`, and verified by `img2 doctor`. `img2 core-path [--json]` prints where `forge/route.py` is.
 - `setup` writes `$IMG2_HOME/provision.json` for the core's `scripts/e2e/route_one.py`.
 
-- `img2 setup`: choose from all five plugins (Enter defaults to all), or use `--yes`, `--plugins`
-  or Jev-only `--minimal`. Installs missing harness/source pins from `plugins.lock.json`, repairs
-  managed links, syncs, provisions the full selected runtime and runs both doctors. Supports explicit
-  weak-hash consent, dependency skips and offline repair; stops on the first failure with a summary.
-  Jev's own `auth-status` determines whether to print the exact TTY login command (exit 3);
-  setup never accepts credentials or grants disclosure/paid-call consent.
+- `img2 setup`: choose among five plugins (Enter defaults to the four domain plugins without Jev),
+  or use `--yes`, `--plugins` or `--minimal` (the same no-Jev bundle). Installs missing harness/source
+  pins from `plugins.lock.json`, repairs managed links, syncs, provisions the full selected runtime and
+  runs both doctors. Supports weak-hash consent, dependency skips and offline repair; stops on real failures.
+  Explicitly selected Jev's own `auth-status` determines whether to print an optional TTY login hint;
+  a missing credential does not fail setup. Setup never accepts credentials or grants disclosure/paid-call consent.
 - `dependencies.lock.json` (schema 1): pinned install manifest for everything `img2threejs` needs (separate
   character bpy 4.5.15 and interior bpy 4.3.0 environments, NumPy/Pillow, Three 0.186.1 and the interior
   viewer's 0.180.0, Playwright 1.64.0 + Chromium, Node >=22, pixi.js, Vite, gltf-validator, esbuild,

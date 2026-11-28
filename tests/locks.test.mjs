@@ -28,14 +28,16 @@ test('plugins.lock rejects unapproved, duplicate and missing plugins', () => {
   assert.match(validatePluginsLock(gone, catalog).join('\n'), /jev is missing/)
 })
 
-test('plugin pins: full SHA, catalog-matching repo/visibility, default-on, honest unpushed note', () => {
+test('plugin pins: full SHA, catalog-matching repo/visibility, Jev opt-in, honest unpushed note', () => {
   const lock = plugins()
   for (const p of lock.plugins) {
     assert.match(p.commit, /^[0-9a-f]{40}$/)
-    assert.equal(p.default, true)
+    assert.equal(p.default, p.id !== 'jev')
     assert.equal(p.selectable, true)
   }
   assert.equal(lock.plugins.find(p => p.id === 'jev').visibility, 'public')
+  const invalidDefault = plugins(); invalidDefault.plugins[0].default = 'true'
+  assert.match(validatePluginsLock(invalidDefault, catalog).join('\n'), /default must be boolean/)
   const bad = plugins(); bad.plugins[0].commit = 'abc123'
   assert.match(validatePluginsLock(bad, catalog).join('\n'), /40-hex/)
   const leak = plugins(); leak.plugins[0].capability = 'plugin-character'

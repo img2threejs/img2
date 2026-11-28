@@ -36,7 +36,8 @@ test('setup CLI refuses invalid input/options and offline fresh installs without
     assert.equal(fs.existsSync(sb.H), false, r.text)
   }
   const r = run(sb, ['--offline'])
-  for (const id of ['character', 'cs2', 'interior', 'jev', 'pixi2d']) assert.match(r.text, new RegExp('\\b' + id + '\\b'))
+  for (const id of ['character', 'cs2', 'interior', 'pixi2d']) assert.match(r.text, new RegExp('\\b' + id + '\\b'))
+  assert.doesNotMatch(r.text, /\bjev\b/i)
   assert.equal(r.code, 2, r.text)
   assert.equal(fs.existsSync(sb.H), false, r.text)
 })

@@ -111,7 +111,7 @@ export function findPillowEnv({ home, record }) {
     return { unit: name, site, tag, rtDir }
   }
   throw new Refusal('no provisioned environment has a verified Pillow for ' + record.python.path,
-    (checked.join('; ') || 'none of ' + PILLOW_UNITS.join(', ') + ' is in the runtime record') + '\nrun `img2 setup` (selecting jev) to provision jev-pillow; nothing was run')
+    (checked.join('; ') || 'none of ' + PILLOW_UNITS.join(', ') + ' is in the runtime record') + '\nrun `img2 setup` to provision the default domain runtimes, or explicitly select a plugin with Pillow (for example --plugins pixi2d); nothing was run')
 }
 
 // ---------------------------------------------------------------- the interpreter

@@ -12,9 +12,9 @@ import { loadLocks } from '../bin/runtime/lock.mjs'
 import { baseOpts, makeDeps, makeFixture, stubMcp, stubRunner, tmp } from './runtime-fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/img2.mjs', import.meta.url))
-const provisioned = async (over = {}) => {
+const provisioned = async (over = {}, opts = {}) => {
   const fx = makeFixture(); const deps = makeDeps(fx, over)
-  assert.equal(await runProvision(baseOpts(), deps.home, deps), EXIT.OK)
+  assert.equal(await runProvision(baseOpts(opts), deps.home, deps), EXIT.OK)
   return { fx, deps }
 }
 const doctor = async (fx, deps, over = {}, json = false) => {
@@ -28,7 +28,7 @@ test('numeric bpy version is extracted from the LTS version string', () => {
   assert.equal(numericVersion('4.3.0'), '4.3.0')
 })
 
-test('doctor --runtime passes on a healthy runtime and keeps auth and licensed input apart from failures', async () => {
+test('doctor --runtime passes on the default runtime without Jev auth and keeps licensed input apart from failures', async () => {
   const { fx, deps } = await provisioned()
   const r = await doctor(fx, deps)
   assert.equal(r.code, EXIT.OK, r.text)
@@ -40,7 +40,7 @@ test('doctor --runtime passes on a healthy runtime and keeps auth and licensed i
   assert.match(r.text, /PASS +source2viewer-version/)
   assert.match(r.text, /PASS +mcp-initialize-tools-list \[mcp-fake\]\s+fake-mcp 1\.0\.0, 3 tools/)
   assert.match(r.text, /PASS +vision-offline-inference/)
-  assert.match(r.text, /AUTH +jev-login/)
+  assert.doesNotMatch(r.text, /jev-login/)
   assert.match(r.text, /LICENSED-INPUT +cs2-vpk/)
   assert.match(r.text, /0 failed/)
 })
@@ -51,14 +51,27 @@ test('doctor --runtime --json is machine readable with counts and per-check fiel
   const j = JSON.parse(r.text)
   assert.equal(j.ok, true)
   assert.equal(j.counts.fail, 0)
-  assert.equal(j.counts.auth, 1)
+  assert.equal(j.counts.auth, 0)
   assert.equal(j.counts['licensed-input'], 1)
   assert.ok(j.checks.every((c) => ['pass', 'fail', 'skipped', 'auth', 'licensed-input'].includes(c.status) && typeof c.id === 'string' && typeof c.expected === 'string'))
   assert.equal(j.checks.find((c) => c.id === 'bpy-import' && c.dependency === 'interior-bpy').actual, 'bpy 4.3.0 (4.3.0 LTS)')
 })
 
-test('a Jev key in the environment or Keychain turns the auth condition into a pass; a VPK clears the licensed-input condition', async () => {
+test('default runtime doctor never probes the credential store even with an environment credential', async () => {
   const { fx, deps } = await provisioned()
+  for (const env of [{}, { TYPESAFE_API_KEY: 'fixture-key' }]) {
+    const run = stubRunner()
+    const r = await doctor(fx, deps, { env, run }, true)
+    const report = JSON.parse(r.text)
+    assert.equal(r.code, EXIT.OK, r.text)
+    assert.deepEqual(report.selectedPlugins, ['character', 'cs2', 'interior', 'pixi2d'])
+    assert.ok(!report.checks.some(c => c.id === 'jev-login'))
+    assert.ok(!run.calls.some(c => c.file === '/usr/bin/security'))
+  }
+})
+
+test('a Jev key in the environment or Keychain turns the auth condition into a pass; a VPK clears the licensed-input condition', async () => {
+  const { fx, deps } = await provisioned({}, { plugins: 'character,cs2,interior,jev,pixi2d' })
   const withKey = await doctor(fx, deps, { env: { TYPESAFE_API_KEY: 'k' } })
   assert.match(withKey.text, /AUTH +jev-login/)
   const home = tmp()

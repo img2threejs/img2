@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { EXIT, Refusal } from '../bin/runtime/errors.mjs'
 import { isAffirmative, parseProvisionOpts, removeRuntime, runProvision } from '../bin/runtime/provision.mjs'
-import { detectPlatform, integrityOf, loadLocks } from '../bin/runtime/lock.mjs'
+import { detectPlatform, integrityOf, loadLocks, resolveSelection } from '../bin/runtime/lock.mjs'
 import { validateSelectorsFile } from '../bin/runtime/selectors.mjs'
 import { baseOpts, makeDeps, makeFixture, sha256, stubDownloader, stubRunner, tmp, PLATFORM } from './runtime-fixtures.mjs'
 
@@ -22,6 +22,28 @@ const snapshot = (dir) => {
   return out
 }
 const refusal = async (fn) => { try { await fn() } catch (e) { return e } assert.fail('expected a refusal') }
+
+test('committed default flags select four domain plugins; Jev and its runtime remain explicitly selectable', () => {
+  const { lock, plugins } = loadLocks()
+  const defaults = resolveSelection({ lock, pluginsLock: plugins, platform: 'darwin-arm64' })
+  assert.deepEqual(defaults.selectedPlugins, ['character', 'cs2', 'interior', 'pixi2d'])
+  assert.ok(!defaults.deps.some(d => d.entry.consumers.length === 1 && d.entry.consumers[0] === 'jev'))
+  const explicit = resolveSelection({ lock, pluginsLock: plugins, plugins: ['jev'], platform: 'darwin-arm64' })
+  assert.deepEqual(explicit.selectedPlugins, ['jev'])
+  assert.ok(explicit.deps.some(d => d.id === 'jev-pillow'))
+})
+
+test('bare provisioning respects default flags and an explicit Jev selection is recorded', async () => {
+  const fx = makeFixture()
+  fx.pluginsLock.plugins.find(p => p.id === 'character').default = false
+  fs.writeFileSync(path.join(fx.root, 'plugins.lock.json'), JSON.stringify(fx.pluginsLock))
+  const bare = makeDeps(fx)
+  assert.equal(await runProvision(baseOpts(), bare.home, bare), EXIT.OK)
+  assert.deepEqual(readJson(path.join(rt(bare), 'selectors.json')).selectedPlugins, ['cs2', 'interior', 'pixi2d'])
+  const explicit = makeDeps(fx)
+  assert.equal(await runProvision(baseOpts({ plugins: 'jev' }), explicit.home, explicit), EXIT.OK)
+  assert.deepEqual(readJson(path.join(rt(explicit), 'selectors.json')).selectedPlugins, ['jev'])
+})
 
 test('--plan prints every environment with sizes, labels unknowns and writes nothing', async () => {
   const fx = makeFixture(); const deps = makeDeps(fx)
@@ -89,7 +111,7 @@ test('a successful run writes selectors.json (0600, atomic), env.sh and a receip
   assert.equal(sel.schema, 1)
   assert.equal(sel.lockDigest, locks.lockDigest)
   assert.equal(sel.pluginsLockDigest, locks.pluginsDigest)
-  assert.deepEqual(sel.selectedPlugins, ['character', 'cs2', 'interior', 'jev', 'pixi2d'])
+  assert.deepEqual(sel.selectedPlugins, ['character', 'cs2', 'interior', 'pixi2d'])
   assert.match(sel.createdAt, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/)
   const allowed = ['IMG2_CHARACTER_NODE', 'IMG2_CHARACTER_BROWSER', 'IMG2_CHARACTER_BPY_PYTHON', 'IMG2_CHARACTER_THREE_ROOT', 'IMG2_CHARACTER_THREE_SHA256', 'IMG2_BLENDER_PYTHON', 'IMG2THREEJS_VISION_PYTHON', 'PLAYWRIGHT_BROWSERS_PATH']
   assert.deepEqual(Object.keys(sel.env).sort(), allowed.slice().sort())

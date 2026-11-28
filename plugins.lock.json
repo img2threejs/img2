@@ -1,35 +1,35 @@
 {
   "schema": 1,
-  "generatedAt": "2026-11-23",
+  "generatedAt": "2026-11-28",
   "defaultInstall": "all",
   "core": {
     "id": "core",
     "repo": "https://github.com/img2threejs/img2threejs",
-    "commit": "9886a1be4c9b98f27ed93bf0e3ada0940e118693",
+    "commit": "a720936dbdc158db0ac8f69fa0e721a9ab1c54eb",
     "branch": "feat/textured-routing-install",
     "pinState": "on-origin",
-    "note": "commit is origin/feat/textured-routing-install HEAD (git ls-remote 2026-11-23), not on origin/main; merge or re-pin before a release"
+    "note": "candidate is published on origin/feat/textured-routing-install; default host-model routing does not require Jev. Not on origin/main and not release acceptance."
   },
   "plugins": [
     {
       "id": "character",
       "capability": "rigged character",
       "repo": "https://github.com/img2threejs/plugin-character",
-      "commit": "3ae440079e9181792983c405f8a2dabeef657528",
+      "commit": "2e55a5f3fbaf0c769103fa412ca1f75615b478cb",
       "visibility": "public",
       "selectable": true,
       "default": true,
       "pinState": "on-origin",
-      "note": "commit is on origin (origin/feat/routed-workflow), not on origin/main; merge or re-pin before a release"
+      "note": "candidate is published on origin/feat/routed-workflow with independently authored synthetic inputs; native quality acceptance remains separate."
     },
     {
       "id": "cs2",
       "capability": "CS2 skin",
       "repo": "https://github.com/img2threejs/plugin-cs2",
-      "commit": "ea41cb608ff5428cc34fba63b3c8e8b6049e2e03",
+      "commit": "edec2d3afcf9b4d63376ef63938d5727ea1baa20",
       "routing": {
         "schema": 1,
-        "commit": "ea41cb608ff5428cc34fba63b3c8e8b6049e2e03",
+        "commit": "edec2d3afcf9b4d63376ef63938d5727ea1baa20",
         "routeCardSha256": "19adb783e9de31448f887eb2a7000d2d38bf14c986c9396f5217c38c0a2af82c",
         "card": {
           "kind": "img2.route-card",
@@ -55,10 +55,10 @@
       "id": "interior",
       "capability": "interior scene",
       "repo": "https://github.com/img2threejs/plugin-interior",
-      "commit": "3d669f33a2d13e2e63831d399fdc1d458f365699",
+      "commit": "5673d2bf578d43d57bf130bcf3f6d7f34b88f009",
       "routing": {
         "schema": 1,
-        "commit": "3d669f33a2d13e2e63831d399fdc1d458f365699",
+        "commit": "5673d2bf578d43d57bf130bcf3f6d7f34b88f009",
         "routeCardSha256": "a488301a65e404684c002e659ac0ae976b39a64671311177be629bc075fcde2f",
         "card": {
           "kind": "img2.route-card",
@@ -81,16 +81,16 @@
       "selectable": true,
       "default": true,
       "pinState": "on-origin",
-      "note": "candidate is origin/feat/jev-four-decisions HEAD (git ls-remote verified before this pin update); independent review and full integration remain pending, not a release acceptance"
+      "note": "candidate is published on origin/feat/jev-four-decisions with the harness 0.6.0 install contract; full native routing and quality acceptance remain separate."
     },
     {
       "id": "jev",
       "capability": "Jev decisions",
       "repo": "https://github.com/img2threejs/plugin-jev",
-      "commit": "ea15e4b0748f6af266c5b956041d974d1c01002f",
+      "commit": "4961464246734dbfbc0e4b8b60adbe9a9b8192e9",
       "visibility": "public",
       "selectable": true,
-      "default": true,
+      "default": false,
       "pinState": "on-origin",
       "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
     },
@@ -98,12 +98,12 @@
       "id": "pixi2d",
       "capability": "2D scene",
       "repo": "https://github.com/img2threejs/plugin-pixi2d",
-      "commit": "de1e6e0b5e4902034895c440f9b2f9d458c48c8c",
+      "commit": "8a361b335f78bf6da69b3d3f5b1898c045123d7b",
       "visibility": "public",
       "selectable": true,
       "default": true,
       "pinState": "on-origin",
-      "note": "commit is on origin (origin/chore/apache-license), not on origin/main (47c8c5a); merge or re-pin before a release"
+      "note": "candidate is published on origin/chore/apache-license with explicit source-code licensing; third-party artwork rights remain separate."
     }
   ]
 }

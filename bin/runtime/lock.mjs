@@ -150,7 +150,7 @@ export function parseCsv(value, flag) {
 export function resolveSelection({ lock, pluginsLock, profile = 'full', plugins = null, skip = [], platform }) {
   if (!PROFILES.includes(profile)) throw new Refusal('unknown profile ' + JSON.stringify(profile), 'expected full or minimal')
   const known = pluginsLock.plugins.filter((p) => p.selectable).map((p) => p.id)
-  const selectedPlugins = (plugins ?? known).slice().sort()
+  const selectedPlugins = (plugins ?? pluginsLock.plugins.filter((p) => p.selectable && p.default).map((p) => p.id)).slice().sort()
   for (const id of selectedPlugins) if (!known.includes(id)) throw new Refusal('unknown plugin ' + JSON.stringify(id), 'expected ' + known.join(', '))
   const byId = new Map(lock.dependencies.map((e) => [e.id, e]))
   for (const id of skip) if (!byId.has(id)) throw new Refusal('unknown dependency id ' + JSON.stringify(id), 'see dependencies.lock.json')

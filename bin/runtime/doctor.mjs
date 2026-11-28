@@ -20,11 +20,11 @@ const row = (status, id, dependency, expected, actual, extra = {}) => ({ status,
 async function jevLogin(deps, platform) {
   if ((deps.env ?? process.env).TYPESAFE_API_KEY?.trim()) return row('auth', 'jev-login', 'jev', 'a TypeSafe API key', 'TYPESAFE_API_KEY is set')
   if (!platform.startsWith('darwin-')) {
-    return row('auth', 'jev-login', 'jev', 'a TypeSafe API key', 'Keychain login is unavailable on this platform', { remedy: 'set TYPESAFE_API_KEY, or choose the explicit user-attested no-account mode' })
+    return row('auth', 'jev-login', 'jev', 'a TypeSafe API key', 'Keychain login is unavailable on this platform', { remedy: 'optional Jev routing: set TYPESAFE_API_KEY; ordinary routing uses the host agent/model without an account' })
   }
   const r = await deps.run('/usr/bin/security', ['find-generic-password', '-a', KEYCHAIN.account, '-s', KEYCHAIN.service], { env: cleanEnv(), timeout: 15_000 })
   if (r.code === 0 && !r.error) return row('pass', 'jev-login', 'jev', 'a TypeSafe API key in the macOS Keychain', 'present (value not read)')
-  return row('auth', 'jev-login', 'jev', 'a TypeSafe API key in the macOS Keychain', 'no Jev login found', { remedy: 'log in to Jev (img2 jev login); without an account a model decides, explicitly and journalled' })
+  return row('auth', 'jev-login', 'jev', 'a TypeSafe API key in the macOS Keychain', 'no Jev login found', { remedy: 'optional Jev routing: log in to Jev (img2 jev login); ordinary routing uses the host agent/model without an account' })
 }
 
 function cs2Vpk(deps, platform) {

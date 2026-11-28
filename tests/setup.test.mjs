@@ -12,6 +12,7 @@ import { loadLocks } from '../bin/runtime/lock.mjs'
 import { baseOpts, makeDeps, makeFixture, stubRunner, tmp } from './runtime-fixtures.mjs'
 
 const IDS = ['character', 'cs2', 'interior', 'jev', 'pixi2d']
+const DEFAULT_IDS = ['character', 'cs2', 'interior', 'pixi2d']
 const COMMIT = Object.fromEntries(IDS.map((id) => [id, crypto.createHash('sha1').update('pin:' + id).digest('hex')]))
 const REPO = Object.fromEntries(IDS.map((id) => [id, 'https://github.com/img2threejs/plugin-' + id]))
 const SECRET = 'sk-live-SECRETVALUE-0123456789'
@@ -26,7 +27,7 @@ const code = (e) => e?.code
 function pinnedFixture(over = {}) {
   const fx = makeFixture(over)
   fx.pluginsLock.plugins = IDS.map((id) => ({
-    id, capability: id, repo: REPO[id], commit: COMMIT[id], visibility: 'public', selectable: true, default: true, pinState: 'on-origin', note: 'fixture',
+    id, capability: id, repo: REPO[id], commit: COMMIT[id], visibility: 'public', selectable: true, default: id !== 'jev', pinState: 'on-origin', note: 'fixture',
   }))
   fs.writeFileSync(path.join(fx.root, 'plugins.lock.json'), JSON.stringify(fx.pluginsLock, null, 2))
   return fx
@@ -105,7 +106,7 @@ function harness({ fx = pinnedFixture(), states = {}, installNeeded = false, cod
 
 const homeOf = () => tmp('img2-setup-home-')
 const managedPython = (fx, home) => path.join(home, 'runtime', loadLocks(fx.root).lockDigest.slice(0, 12), 'runtime', 'python-runtime', 'bin', 'python3')
-const FULL = ['install', 'core', ...IDS.map((i) => 'add:' + i), 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth']
+const FULL = ['install', 'core', ...DEFAULT_IDS.map((i) => 'add:' + i), 'sync', 'provision', 'doctor', 'doctorRuntime', 'record']
 const SAFE = /^[a-zA-Z0-9_./:@=-]+$/
 const sq = (v) => (SAFE.test(v) ? v : "'" + v.replace(/'/g, "'\\''") + "'")
 
@@ -116,8 +117,8 @@ test('SETUP_PLUGINS lists the five plugins in canonical order with a description
   for (const p of SETUP_PLUGINS) assert.ok(typeof p.description === 'string' && p.description.trim().length > 0, p.id)
 })
 
-test('parseSetupSelection: Enter and whitespace choose everything', () => {
-  for (const answer of ['', '   ', '\t', '\n']) assert.deepEqual(parseSetupSelection(answer), IDS, JSON.stringify(answer))
+test('parseSetupSelection: Enter and whitespace choose the four domain plugins without Jev', () => {
+  for (const answer of ['', '   ', '\t', '\n']) assert.deepEqual(parseSetupSelection(answer), DEFAULT_IDS, JSON.stringify(answer))
   assert.throws(() => parseSetupSelection(null), (e) => code(e) === 3, 'EOF is not Enter')
 })
 
@@ -147,25 +148,25 @@ test('explicit --plugins beats --minimal and --yes, and never prompts', async ()
   assert.deepEqual(await selectSetupPlugins({ plugins: 'pixi2d,pixi2d', minimal: true, yes: true }, all), ['pixi2d'])
 })
 
-test('--minimal selects only jev and beats --yes without prompting', async () => {
-  assert.deepEqual(await selectSetupPlugins({ minimal: true }, { isTTY: true, ask: noAsk }), ['jev'])
-  assert.deepEqual(await selectSetupPlugins({ minimal: true, yes: true }, { isTTY: true, ask: noAsk }), ['jev'])
-  assert.deepEqual(await selectSetupPlugins({ minimal: true }, { isTTY: false, ask: noAsk }), ['jev'])
+test('--minimal selects the same no-Jev default bundle and beats --yes without prompting', async () => {
+  assert.deepEqual(await selectSetupPlugins({ minimal: true }, { isTTY: true, ask: noAsk }), DEFAULT_IDS)
+  assert.deepEqual(await selectSetupPlugins({ minimal: true, yes: true }, { isTTY: true, ask: noAsk }), DEFAULT_IDS)
+  assert.deepEqual(await selectSetupPlugins({ minimal: true }, { isTTY: false, ask: noAsk }), DEFAULT_IDS)
 })
 
-test('--yes selects everything without prompting, even on a TTY', async () => {
-  assert.deepEqual(await selectSetupPlugins({ yes: true }, { isTTY: true, ask: noAsk }), IDS)
-  assert.deepEqual(await selectSetupPlugins({ yes: true }, { isTTY: false, ask: noAsk }), IDS)
+test('--yes selects the four domain plugins without prompting, even on a TTY', async () => {
+  assert.deepEqual(await selectSetupPlugins({ yes: true }, { isTTY: true, ask: noAsk }), DEFAULT_IDS)
+  assert.deepEqual(await selectSetupPlugins({ yes: true }, { isTTY: false, ask: noAsk }), DEFAULT_IDS)
 })
 
-test('a non-TTY without flags selects everything and never prompts', async () => {
-  assert.deepEqual(await selectSetupPlugins({}, { isTTY: false, ask: noAsk }), IDS)
-  assert.deepEqual(await selectSetupPlugins({ plugins: null, minimal: false, yes: false }, { isTTY: false }), IDS)
+test('a non-TTY without flags selects the four domain plugins and never prompts', async () => {
+  assert.deepEqual(await selectSetupPlugins({}, { isTTY: false, ask: noAsk }), DEFAULT_IDS)
+  assert.deepEqual(await selectSetupPlugins({ plugins: null, minimal: false, yes: false }, { isTTY: false }), DEFAULT_IDS)
 })
 
-test('a TTY without flags asks exactly once: Enter means all, a list is parsed in canonical order', async () => {
+test('a TTY without flags asks exactly once: Enter means the default bundle, a list is parsed in canonical order', async () => {
   const enter = []
-  assert.deepEqual(await selectSetupPlugins({}, { isTTY: true, ask: async (q) => { enter.push(q); return '' } }), IDS)
+  assert.deepEqual(await selectSetupPlugins({}, { isTTY: true, ask: async (q) => { enter.push(q); return '' } }), DEFAULT_IDS)
   assert.equal(enter.length, 1)
   assert.ok(typeof enter[0] === 'string' && enter[0].length > 0)
 
@@ -193,7 +194,7 @@ test('EOF on the prompt exits 3; an empty --plugins is refused with code 2', asy
 
 // ---------------------------------------------------------------- runSetup: ordered calls
 
-test('a fresh machine installs, adds every plugin at its immutable pin, then syncs, provisions, doctors and checks Jev auth in order', async () => {
+test('a fresh machine installs the four default domain plugins at immutable pins, then syncs, provisions and doctors without Jev auth', async () => {
   const h = harness({ installNeeded: true, states: Object.fromEntries(IDS.map((id) => [id, { action: 'add', ref: null }])) })
   const home = homeOf()
   assert.equal(await runSetup(setupOpts(), home, h.deps), 0, h.text())
@@ -202,8 +203,8 @@ test('a fresh machine installs, adds every plugin at its immutable pin, then syn
   assert.equal(h.installs.length, 1)
   assert.equal(h.installs[0].opts.home, home)
   assert.equal(h.installs[0].opts.yes, true)
-  assert.equal(h.adds.length, IDS.length)
-  for (const [i, id] of IDS.entries()) {
+  assert.equal(h.adds.length, DEFAULT_IDS.length)
+  for (const [i, id] of DEFAULT_IDS.entries()) {
     const { opts, spec } = h.adds[i]
     assert.equal(opts.plugin, id)
     assert.equal(opts.ref, COMMIT[id], 'the lock commit, never a branch or tag')
@@ -224,7 +225,7 @@ test('keep/add/replace: only plugins that need it are added; replace is forced; 
       pixi2d: { action: 'keep', ref: COMMIT.pixi2d },
     },
   })
-  assert.equal(await runSetup(setupOpts(), homeOf(), h.deps), 0, h.text())
+  assert.equal(await runSetup(setupOpts({ plugins: IDS.join(',') }), homeOf(), h.deps), 0, h.text())
   assert.deepEqual(h.log, ['core', 'add:cs2', 'add:interior', 'add:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
   assert.equal(h.installs.length, 0)
   const byId = Object.fromEntries(h.adds.map((a) => [a.opts.plugin, a]))
@@ -261,11 +262,11 @@ test('provision receives profile full, the selection, yes, and the shared runtim
   assert.equal(h.runtimeDoctors[0].deps.home, h.runtimeDeps.home)
 })
 
-test('--minimal installs only jev yet still provisions the full profile for it', async () => {
-  const h = harness({ states: { jev: { action: 'add', ref: null } } })
+test('--minimal installs the four default domain plugins and still provisions the full profile', async () => {
+  const h = harness({ states: Object.fromEntries(IDS.map(id => [id, { action: 'add', ref: null }])) })
   assert.equal(await runSetup(setupOpts({ minimal: true }), homeOf(), h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['core', 'add:jev', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
-  assert.equal(h.provisions[0].opts.plugins, 'jev')
+  assert.deepEqual(h.log, FULL.filter(step => step !== 'install'))
+  assert.equal(h.provisions[0].opts.plugins, DEFAULT_IDS.join(','))
   assert.equal(h.provisions[0].opts.profile, 'full')
   assert.equal(h.provisions[0].opts.minimal, false)
 })
@@ -276,16 +277,18 @@ test('--yes with --plugins or --minimal keeps the explicit narrower choice', asy
   assert.equal(a.provisions[0].opts.plugins, 'cs2')
   const b = harness()
   assert.equal(await runSetup(setupOpts({ yes: true, minimal: true, plugins: null }), homeOf(), b.deps), 0, b.text())
-  assert.equal(b.provisions[0].opts.plugins, 'jev')
+  assert.equal(b.provisions[0].opts.plugins, DEFAULT_IDS.join(','))
   const c = harness()
   assert.equal(await runSetup(setupOpts({ yes: true, minimal: true, plugins: 'interior' }), homeOf(), c.deps), 0, c.text())
   assert.equal(c.provisions[0].opts.plugins, 'interior')
 })
 
-test('non-TTY without flags selects all five and never asks', async () => {
-  const h = harness({ ask: noAsk })
+test('non-TTY without flags selects the four domain plugins and never asks or checks Jev auth', async () => {
+  const h = harness({ ask: noAsk, auth: () => { throw new Error('Jev auth must not run') } })
   assert.equal(await runSetup(setupOpts({ yes: false }), homeOf(), h.deps), 0, h.text())
-  assert.equal(h.provisions[0].opts.plugins, IDS.join(','))
+  assert.equal(h.provisions[0].opts.plugins, DEFAULT_IDS.join(','))
+  assert.equal(h.authRuns.length, 0)
+  assert.match(h.text(), /host agent\/model \(no Jev account required/)
 })
 
 test('a TTY prompts once for the selection and does not ask again', async () => {
@@ -299,7 +302,9 @@ test('a TTY prompts once for the selection and does not ask again', async () => 
 
   const enter = harness({ isTTY: true, ask: async () => '' })
   assert.equal(await runSetup(setupOpts({ yes: false }), homeOf(), enter.deps), 0, enter.text())
-  assert.equal(enter.provisions[0].opts.plugins, IDS.join(','))
+  assert.equal(enter.provisions[0].opts.plugins, DEFAULT_IDS.join(','))
+  assert.ok(enter.out.some(line => line.startsWith('  [ ] jev - ')), 'Jev is visibly opt-in')
+  assert.equal(enter.authRuns.length, 0)
 
   for (const o of [{ yes: true }, { plugins: 'cs2' }, { minimal: true }]) {
     const quiet = harness({ isTTY: true, ask: noAsk })
@@ -435,7 +440,7 @@ for (const [key, c] of [['install', 1], ['add:cs2', 1], ['sync', 2], ['provision
     assert.match(text, new RegExp('Setup stopped at [^\\n]*\\(exit ' + c + '\\)'))
     assert.equal(h.summaries().length, 1, 'the summary is printed even on partial failure')
     assert.deepEqual(h.summaries()[0].headers, HEADERS)
-    assert.deepEqual(h.summaries()[0].rows.map((r) => r[0]), IDS)
+    assert.deepEqual(h.summaries()[0].rows.map((r) => r[0]), DEFAULT_IDS)
     assert.equal(h.authRuns.length, 0, 'no auth probe when an earlier step failed')
   })
 
@@ -457,18 +462,18 @@ test('repeating setup keeps the pins: the second run adds nothing but still sync
   const h = harness({ installNeeded: true, states: Object.fromEntries(IDS.map((id) => [id, { action: 'add', ref: null }])) })
   const home = homeOf()
   assert.equal(await runSetup(setupOpts(), home, h.deps), 0, h.text())
-  assert.equal(h.adds.length, IDS.length)
+  assert.equal(h.adds.length, DEFAULT_IDS.length)
   const refs = Object.fromEntries(h.adds.map((a) => [a.opts.plugin, a.opts.ref]))
   h.log.length = 0
   h.out.length = 0
   h.tables.length = 0
   assert.equal(await runSetup(setupOpts(), home, h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['core', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record', 'auth'])
-  assert.equal(h.adds.length, IDS.length, 'no second add')
+  assert.deepEqual(h.log, ['core', 'sync', 'provision', 'doctor', 'doctorRuntime', 'record'])
+  assert.equal(h.adds.length, DEFAULT_IDS.length, 'no second add')
   assert.equal(h.installs.length, 1)
-  assert.deepEqual(refs, COMMIT)
+  assert.deepEqual(refs, Object.fromEntries(DEFAULT_IDS.map(id => [id, COMMIT[id]])))
   assert.equal(h.summaries().length, 1)
-  assert.deepEqual(h.summaries()[0].rows.map((r) => r[0]), IDS)
+  assert.deepEqual(h.summaries()[0].rows.map((r) => r[0]), DEFAULT_IDS)
   for (const row of h.summaries()[0].rows) assert.ok(String(row[1]).includes(COMMIT[row[0]].slice(0, 7)), row[0] + ' reports its pinned ref')
 })
 
@@ -486,10 +491,10 @@ test('summary table has the agreed columns, one row per selected plugin and the 
 
 // ---------------------------------------------------------------- Jev auth
 
-test('missing Jev auth prints the exact shell-safe login command and returns 3', async () => {
+test('missing optional Jev auth prints the shell-safe login hint and host-model route command while setup succeeds', async () => {
   const h = harness({ auth: MISSING })
   const home = homeOf()
-  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 3, h.text())
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 0, h.text())
   const script = path.join(home, 'plugins/jev/tools/jev.py')
   assert.equal(h.authRuns.length, 1)
   const call = h.authRuns[0]
@@ -502,6 +507,9 @@ test('missing Jev auth prints the exact shell-safe login command and returns 3',
   const route = h.out.findIndex((l) => l.startsWith('node ' + path.join(home, 'harness/bin/img2.mjs') + ' --home ' + home + ' route '))
   const login = h.out.findIndex((l) => l.includes(' login'))
   assert.ok(login >= 0 && route > login, 'the login command, then the img2 route command: ' + h.text())
+  assert.match(h.text(), /To opt in to Jev routing/)
+  assert.match(h.text(), /host agent\/model \(no Jev account required/)
+  assert.match(h.text(), /Setup complete/)
 })
 
 test('the login command quotes spaces and apostrophes with POSIX escaping and only when needed', async () => {
@@ -509,7 +517,7 @@ test('the login command quotes spaces and apostrophes with POSIX escaping and on
   const home = path.join(base, "o'brien home")
   fs.mkdirSync(home)
   const h = harness({ auth: MISSING })
-  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 3, h.text())
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), home, h.deps), 0, h.text())
   const script = path.join(home, 'plugins/jev/tools/jev.py')
   const want = `IMG2_HOME=${sq(home)} ${sq(managedPython(h.fx, home))} ${sq(script)} login`
   assert.ok(want.includes("'\\''"), 'fixture exercises the apostrophe escape')
@@ -517,7 +525,7 @@ test('the login command quotes spaces and apostrophes with POSIX escaping and on
 
   const plain = harness({ auth: MISSING })
   const safe = homeOf()
-  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), safe, plain.deps), 3)
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), safe, plain.deps), 0)
   const line = plain.out.find((l) => l.startsWith('IMG2_HOME='))
   assert.ok(line.includes(`IMG2_HOME=${safe} ${managedPython(plain.fx, safe)} ${path.join(safe, 'plugins/jev/tools/jev.py')} login`), 'safe tokens are not quoted')
 })
@@ -570,7 +578,7 @@ test('without Jev selected there is no auth probe and no login invocation', asyn
 test('setup never runs a Jev login: every runtime command is auth-status', async () => {
   const seen = []
   const h = harness({ auth: (file, args) => { seen.push([file, ...args]); return MISSING() } })
-  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), homeOf(), h.deps), 3)
+  assert.equal(await runSetup(setupOpts({ plugins: 'jev' }), homeOf(), h.deps), 0)
   assert.equal(seen.length, 1)
   assert.ok(seen.every((c) => c.includes('auth-status') && !c.includes('login') && !c.some((a) => String(a).startsWith('--'))))
 })
@@ -599,12 +607,12 @@ test('real runtime: setup provisions, a repeat reuses verified units, a damaged 
   }
 
   assert.equal(await runSetup(opts, rd.home, h.deps), 0, h.text() + '\n' + rd.errs.join('\n'))
-  assert.deepEqual(h.log, ['core', 'sync', 'doctor', 'record', 'auth'], 'real provision and runtime doctor are not recorded by the stubs')
+  assert.deepEqual(h.log, ['core', 'sync', 'doctor', 'record'], 'real provision and runtime doctor are not recorded by the stubs')
   const first = receipt()
   assert.equal(first.status, 'ok')
   assert.ok(first.units.length > 3)
   assert.ok(first.units.every((u) => u.reused === false), 'a clean home builds every unit')
-  assert.deepEqual(first.selectedPlugins, IDS)
+  assert.deepEqual(first.selectedPlugins, DEFAULT_IDS)
   assert.ok(fs.existsSync(path.join(rt, 'selectors.json')))
   passing()
 
@@ -613,7 +621,7 @@ test('real runtime: setup provisions, a repeat reuses verified units, a damaged 
   assert.ok(fetched > 0)
   reset()
   assert.equal(await runSetup(opts, rd.home, h.deps), 0, h.text())
-  assert.deepEqual(h.log, ['core', 'sync', 'doctor', 'record', 'auth'])
+  assert.deepEqual(h.log, ['core', 'sync', 'doctor', 'record'])
   assert.equal(h.adds.length, 0)
   assert.equal(rd.download.calls.length, fetched, 'no new downloads')
   const second = receipt()
@@ -641,7 +649,7 @@ test('a real runtime doctor failure stops setup before the Jev auth probe and re
   const rd = makeDeps(fx, { run: stubRunner() })
   // the stubbed provision "succeeds" without building, so the real runtime doctor finds no completed provision
   const h = harness({ fx, rd, real: ['doctorRuntime'], auth: PRESENT })
-  assert.equal(await runSetup(setupOpts({ allowWeakHash: true }), rd.home, h.deps), 1, h.text())
+  assert.equal(await runSetup(setupOpts({ plugins: IDS.join(','), allowWeakHash: true }), rd.home, h.deps), 1, h.text())
   assert.deepEqual(h.log, ['core', 'sync', 'provision', 'doctor'])
   assert.equal(h.authRuns.length, 0)
   assert.match(h.text(), /Setup stopped at doctor --runtime \(exit 1\)/)
@@ -653,7 +661,7 @@ test('a real runtime provision failure surfaces exit 1 and stops before the doct
   const fx = pinnedFixture()
   const rd = makeDeps(fx, { run: stubRunner({ failOn: ['venv'] }) })
   const h = harness({ fx, rd, real: ['provision', 'doctorRuntime'], auth: PRESENT })
-  assert.equal(await runSetup(setupOpts({ allowWeakHash: true }), rd.home, h.deps), 1, h.text())
+  assert.equal(await runSetup(setupOpts({ plugins: IDS.join(','), allowWeakHash: true }), rd.home, h.deps), 1, h.text())
   assert.deepEqual(h.log, ['core', 'sync'])
   assert.equal(h.authRuns.length, 0)
   assert.match(h.text(), /Setup stopped at provision \(exit 1\)/)
