@@ -80,8 +80,9 @@ it and do not paste its contents into an issue.
 
 ## Secrets
 
-The harness requires no credentials, reads no environment secrets, and writes none. If you find a value
-that looks like a token in this tree, treat it as a defect and report it.
+The harness requires no credentials and writes none. The one environment secret it handles is `TYPESAFE_API_KEY`
+(Jev's supported credential override): `img2 route` and `img2 core-run` forward it, and nothing else secret, to the
+core, and never print it. If you find a value that looks like a token in this tree, treat it as a defect and report it.
 
 ## Supported versions
 

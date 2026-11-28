@@ -76,10 +76,10 @@ function sandbox(t) {
   fs.mkdirSync(origins)
   const config = path.join(root, 'gitconfig')
   fs.writeFileSync(config, '[url "file://' + origins + '/"]\n  insteadOf = https://github.com/img2threejs/\n')
-  const preload = path.join(root, 'preload.mjs')
+  const preload = path.join(root, 'preload.cjs')
   const fetched = path.join(root, 'catalog-fetched')
   fs.writeFileSync(preload, `
-    import fs from 'node:fs';
+    const fs = require('node:fs');
     globalThis.fetch = async url => {
       if (url !== ${JSON.stringify(CATALOG_URL)}) throw new Error('unexpected URL');
       fs.writeFileSync(${JSON.stringify(fetched)}, '1');
@@ -90,8 +90,8 @@ function sandbox(t) {
     root, HOME, origins, fetched, H: path.join(HOME, '.img2'),
     env: { HOME, PATH: path.join(HOME, '.local/bin') + path.delimiter + process.env.PATH,
       IMG2_HOME: path.join(HOME, '.img2'), XDG_CONFIG_HOME: path.join(HOME, '.config'),
-      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', NO_COLOR: '1',
-      NODE_OPTIONS: '--import=' + preload },
+      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.file://' + origins + '/.insteadOf', GIT_CONFIG_VALUE_0: 'https://github.com/img2threejs/', GIT_TERMINAL_PROMPT: '0', NO_COLOR: '1',
+      NODE_OPTIONS: '--require=' + preload },
   }
   sb.harnessWork = bareOrigin(sb, 'img2')
   fs.cpSync(CORE, path.join(sb.harnessWork, 'img2_core'), { recursive: true, filter: src => !src.includes('__pycache__') })
@@ -100,8 +100,10 @@ function sandbox(t) {
   return sb
 }
 
+// Install tests exercise the harness layout offline; the pinned core checkout has its own tests (core.test.mjs).
+const offlineInstall = args => (args[0] === 'install' && !args.includes('--no-core') ? [...args, '--no-core'] : args)
 function run(sb, args, expected = 0, env = {}) {
-  const result = spawnSync(process.execPath, [BIN, ...args], {
+  const result = spawnSync(process.execPath, [BIN, ...offlineInstall(args)], {
     cwd: sb.root, env: { ...sb.env, ...env }, encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
   })
   assert.equal(result.status, expected, JSON.stringify(args) + '\n' + result.stdout + result.stderr + (result.error || ''))
@@ -294,4 +296,36 @@ test('ensure advances the checkout to the CLI version, adds a public plugin once
   const again = run(sb, ['ensure', 'hello-cube'])
   assert.ok(again.stdout.includes('hello-cube already installed v0.1.0'), again.stdout)
   assert.equal(registrations(sb)[0].resolvedSha, pinned)
+})
+
+test('H2 a SHA pin survives an ancestor tag and advances only to a descendant release', t => {
+  const sb = sandbox(t)
+  harnessRelease(sb, CLI_TAG)
+  pluginRelease(sb, '0.1.0')
+  fs.writeFileSync(path.join(sb.pluginWork, 'SKILL.md'), '# reviewed pin\n')
+  commit(sb, sb.pluginWork)
+  git(sb, sb.pluginWork, ['push', '-q', 'origin', 'main'])
+  const pin = git(sb, sb.pluginWork, ['rev-parse', 'HEAD'])
+  run(sb, ['install', '--yes'])
+  run(sb, ['add', 'img2threejs/plugin-hello-cube', '--ref', pin, '--yes'])
+  run(sb, ['update', 'hello-cube', '--yes'])
+  assert.equal(registrations(sb)[0].resolvedSha, pin, 'an older tag must not downgrade an immutable pin')
+  const next = pluginRelease(sb, '0.2.0')
+  run(sb, ['update', 'hello-cube', '--yes'])
+  assert.equal(registrations(sb)[0].resolvedSha, next, 'a proven descendant release is allowed')
+})
+
+test('H2 an unrelated release cannot replace an immutable pin', t => {
+  const sb = sandbox(t)
+  harnessRelease(sb, CLI_TAG)
+  const pin = pluginRelease(sb, '0.1.0')
+  run(sb, ['install', '--yes'])
+  run(sb, ['add', 'img2threejs/plugin-hello-cube', '--ref', pin, '--yes'])
+  const before = fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8')
+  git(sb, sb.pluginWork, ['checkout', '--orphan', 'unrelated'])
+  git(sb, sb.pluginWork, ['rm', '-rf', '.'])
+  pluginRelease(sb, '9.0.0')
+  run(sb, ['update', 'hello-cube', '--yes'], 2)
+  assert.equal(fs.readFileSync(path.join(sb.H, 'plugins.json'), 'utf8'), before)
+  assert.equal(git(sb, path.join(sb.H, 'plugins/hello-cube'), ['rev-parse', 'HEAD']), pin)
 })

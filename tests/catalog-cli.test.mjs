@@ -37,9 +37,9 @@ function writeFetchFixture(root, payload, { fetchStatus = 200, fetchReject = fal
   const fixturePath = path.join(root, 'catalog.json')
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload)
   fs.writeFileSync(fixturePath, text)
-  const preloadPath = path.join(root, 'preload.mjs')
+  const preloadPath = path.join(root, 'preload.cjs')
   fs.writeFileSync(preloadPath, `
-import fs from 'node:fs'
+const fs = require('node:fs')
 const MARKER = ${JSON.stringify(path.join(root, 'fetch-called'))}
 const FIXTURE = ${JSON.stringify(fixturePath)}
 const TARGET = ${JSON.stringify(CATALOG_URL)}
@@ -84,7 +84,7 @@ const fixtureCatalog = {
 function envFor(sb, { preload = null, home = sb.home, invalidHome = false } = {}) {
   const env = { ...sb.env, HOME: home }
   if (invalidHome) env.IMG2_HOME = 'relative-home'
-  if (preload) env.NODE_OPTIONS = '--import=' + preload
+  if (preload) env.NODE_OPTIONS = '--require=' + preload
   return env
 }
 

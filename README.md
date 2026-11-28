@@ -1,8 +1,277 @@
 # img2
 
-Plugin harness for the img2 ecosystem: everything is a plugin. The harness ships no domain
-capability — it owns install/link plumbing, the plugin registry, the workspace state envelope,
-the gate runner, and the contract.
+**img2threejs turns a reference image into a textured, realistic 3D GLB.** `img2` is the plugin
+harness behind it: it installs the domain plugins, the shared runtime they need (Blender `bpy`,
+Chromium/Playwright, Three.js, vision models, CS2 tools, MCP servers). Ordinary routing uses your
+current host agent/model, without a Jev plugin, account or interactive terminal. The optional **Jev**
+plugin provides paid bounded routing and repair advice; acceptance stays with each plugin's own gates.
+
+The harness itself ships no domain capability: everything is a plugin. It owns install/link
+plumbing, the plugin registry, the workspace state envelope, the gate runner, and the contract.
+
+## Get started in one command
+
+```bash
+npx --yes @img2threejs/img2@latest setup
+```
+
+Once the harness is installed, the same flow is available from the launcher:
+
+```bash
+img2 setup
+```
+
+The npm package is the scoped `@img2threejs/img2` (there is no unscoped `img2threejs` package).
+The `--yes` here belongs to **npx** (permission to download the CLI package); it is not an
+`img2 setup` flag. From a source checkout of this repository, or if the CLI you resolved does not
+have a `setup` command yet, run `node bin/img2.mjs setup` from the checkout instead.
+
+`setup` asks which plugins you want, then installs the pinned core and plugins, syncs, provisions the
+runtime and audits the result.
+
+| Plugin | What it provides | Git source |
+|---|---|---|
+| `character` | Character rigging, skin conditioning, animation and rig gates | Public |
+| `cs2` | Counter-Strike 2 weapon/glove skin reconstruction and review gates | Public |
+| `interior` | Image/reference to an interior scene: Blender authoring, PBR, render/repair and verified delivery | Public |
+| `jev` | Bounded image-aware routing and repair advisories to the right plugin; never acceptance authority | Public |
+| `pixi2d` | Explicit 2D image reconstruction in PixiJS with editable nodes and a blocking review gate | Public |
+
+Choose a plugin set at the prompt (Enter = `character,cs2,interior,pixi2d`; Jev is opt-in), or skip
+the prompt with flags:
+
+```bash
+img2 setup                                  # Enter = four domain plugins, without Jev
+img2 setup --plugins cs2,jev                # explicit list including optional Jev; skips the prompt
+img2 setup --minimal                        # same four-domain-plugin default bundle (see below)
+img2 setup --yes                            # four domain plugins, no prompt
+img2 setup --strict-hash                    # refuse hash-weak downloads (default: accept and record)
+img2 setup --skip cs2-dotnet-runtime        # disable a dependency (repeatable)
+img2 setup --offline                        # no network; see below
+img2 setup --home /abs/path --from /path/to/harness-checkout
+```
+
+Setup flags are only `--yes`, `--plugins`, `--minimal`, `--home`, `--from` (a local harness
+source), `--strict-hash`, `--skip` and `--offline` (`--allow-weak-hash` is still accepted; it is the default).
+
+- **Selection precedence:** explicit `--plugins` beats `--minimal`, which beats `--yes`. The prompt
+  accepts Enter (the four domain plugins) or a comma-separated list of the IDs above; duplicates collapse,
+  and unknown or empty list items are refused. With no TTY and no flags, setup selects the same four
+  without asking. An empty `--plugins` value is refused. Select `--plugins jev` explicitly to install Jev.
+- **`--minimal` selects the same no-Jev default bundle**, with the full runtime profile for those
+  plugins. It does not introduce a core-only install. It is **not** the `img2 provision --minimal`
+  runtime profile, which drops vision, MCP servers and extra browsers.
+- **Hash-weak entries are accepted by default.** The lock pins some entries only by MD5/CRC32C, git
+  SHA-1 or a GCS generation (Playwright browser bundles from the CDN, model configs). `setup` proceeds,
+  records a locally computed SHA-256 in `runtime/provision.json` and prints one `Notice:` line with the
+  count. **`--strict-hash`** refuses them instead, in preflight and before anything is changed (combine
+  with `--skip` to drop those dependencies). `img2 provision` on its own still needs `--allow-weak-hash`.
+- **Plugin tools run with the provisioned Python 3.11**, never the ambient `python3`
+  (`$IMG2_HOME/runtime/<digest>/runtime/python-runtime/bin/python3`). Setup prints the exact
+  interpreter. If `python-runtime` is skipped, setup needs a PATH Python ≥ 3.10 and refuses before
+  installing anything when it finds none; the login command it prints uses the same interpreter.
+- **`--skip <dependency-id>`** disables that dependency and everything that needs it. Repeat it for
+  several IDs; take the IDs from `dependencies.lock.json`.
+- **`--offline`** needs an existing Git-installed harness (or a local `--from` source), selected
+  Git plugin checkouts at their lock pins and a complete, verified runtime cache. No Git downloads.
+
+### What setup does
+
+1. `install`, only if the harness checkout or installation metadata is absent.
+   Setup verifies the **installed** CLI is >= 0.6.0 and advertises route interface 1 before provisioning.
+   An obsolete checkout is refused, not silently upgraded: explicitly run `img2 update harness --yes`
+   to a reviewed release, or move it aside and use `--from` with a reviewed checkout.
+1b. `core`: check out the pinned core skill (`plugins.lock.json` `core`: repo
+   `img2threejs/img2threejs`, one exact commit) at `$IMG2_HOME/core`, verify `HEAD` equals the pin, and
+   link it into each detected host as `img2threejs` (a foreign file or symlink there is refused before
+   any download). `img2 core-path` prints `$IMG2_HOME/core/forge/route.py`, the router. `img2 install`
+   does the same unless `--no-core`; `img2 doctor` verifies commit, cleanliness, router and links.
+2. `add` each selected plugin at its **pinned** commit from `plugins.lock.json`, only for plugins
+   that are missing or whose managed checkout differs from the pin.
+3. `sync` generated files.
+4. `provision --profile full --plugins <selection>`: managed Python/Node and shared routing
+   dependencies, plus the selected plugins' environments (two separate `bpy` environments when
+   character and interior are selected), browsers, Three, vision, CS2 tools and MCP servers.
+5. `doctor` (static installation audit).
+6. `doctor --runtime` (proves each runtime piece works).
+7. Only when Jev was explicitly selected: its credential status (`jev.py auth-status`, local-only,
+   run with the provisioned Python), with an opt-in login hint when no credential is present.
+
+After step 6 setup writes `$IMG2_HOME/provision.json` (harness commit and launcher SHA-256, node, the
+installed plugin dirs, core path, interpreter) and prints the normal host-model `img2 route` command.
+When Jev was explicitly selected but has no credential, setup also prints its optional login command and succeeds.
+
+#### Running the core: `img2 route` / `img2 core-run`
+
+`img2 route <route.py args>` is the one supported way to run the pinned core router from an install;
+`img2 core-run <script under core/forge> <args>` runs any other core script (e.g. `preflight.py`) the same
+way, without adding pins. Both read `provision.json`, refuse with the remedy when it is missing, stale or
+its launcher hash differs, and then:
+
+- resolve `IMG2_HOME` with `realpath` and export `IMG2_HOME` and `IMG2_HARNESS_DIR`;
+- start the core with a minimal environment (identity, locale, TLS/proxy settings and `TYPESAFE_API_KEY`
+  only; never `PYTHONPATH`, pip/npm settings or `NODE_OPTIONS`); `PATH` is the managed Python dir, the
+  pinned Node dir, the dir of the `blender` already on your `PATH`, your other absolute `PATH` entries,
+  then the system dirs;
+- run the core under `runtime/<digest>/route-python`: a copy of the managed CPython whose only extra import
+  path is the site-packages of the provisioned env whose Pillow passed its runtime probe (`jev`, then
+  `pixi2d`, ...). The core's Jev image preparation resolves its interpreter and runs it with `-I`, so
+  neither a venv symlink nor `PYTHONPATH` can supply Pillow;
+- for `route`, add `--harness-root/--harness-sha/--harness-executable/--harness-sha256` from
+  `provision.json` unless you passed them.
+
+Ordinary routing uses core's `--decider model` default. The harness forwards arguments unchanged;
+it does not answer questions or choose a model itself:
+
+```bash
+img2 route --workspace WORKSPACE --run-id RUN_ID --image IMAGE --objects OBJECTS.json
+img2 route --workspace WORKSPACE --run-id RUN_ID --image IMAGE --objects OBJECTS.json \
+  --decider model --model-id HOST_MODEL_ID --token-budget 256000
+# Answer the core's questions with your actual host model, then resume with its typed answer file:
+img2 route --workspace WORKSPACE --run-id RUN_ID --image IMAGE --objects OBJECTS.json \
+  --decider model --model-id HOST_MODEL_ID --token-budget 256000 --model-answers ANSWERS.json
+```
+
+3D routing requires object proposals via `--objects OBJECTS.json`. Only explicit 2D routing
+(`--expected-output 2d`) can omit object proposals.
+
+Missing answers produce `questions-ready` with a `questionsRef`, not a Jev login requirement.
+No concrete model ID is invented when `--model-id` is omitted; core uses the logical `host-agent`
+selector. Answers must match the core's bound request/context. To opt in to paid Jev routing,
+explicitly pass `--decider jev`; its credentials, release pins and disclosure/paid-call consent
+remain required. Provisioning, integrity checks and native delivery gates are unchanged.
+
+With `install --auto-install` consent and an already valid runtime, a normal 3D route can add a
+missing public producer **before continuing the same request**. It matches typed proposal roles and
+observations against `plugins.lock.json` routing snapshots; no plugin flag or separate install
+command is needed for a matching card. Object labels/IDs never become package names or commands.
+The installed harness must be clean and setup-pinned. Its catalog validates the source, its lock
+selects one exact Git commit, and the fetched `route.json` must match both the recorded SHA-256 and
+card data. Missing/older routing metadata and unsupported runtimes refuse rather than guessing.
+The current Interior snapshot supports one enclosed room; the unconstrained CS2 card is not inferred
+from a name, and the old Character pin has no routing snapshot. Those are not implicit auto-install
+approvals. The core still makes all actual routing, permission, producer and terminal decisions.
+
+Concurrent requests serialize installation; an already installed exact clean pin is reused without
+fetching. An install publication error restores its previous registry/generated files, links and
+setup receipt. Local, dirty, foreign or differently pinned registrations are never replaced by this
+path. `IMG2_AUTO_INSTALL=0` or absence of the opt-in marker prevents automatic installation.
+Installer diagnostics go to stderr so stdout remains the original router response.
+
+It never grants consent or logs in. One summary line (paths, Pillow version, blender) goes to stderr;
+stdout is the router's. That file is what the
+core's `scripts/e2e/route_one.py --home "$IMG2_HOME"` reads, so a clean home can route without
+hand-built inputs; the core's own pin check (`forge/route.py`) also requires the launcher's import
+closure to stay static (see `tests/launcher-closure.test.mjs`).
+
+Any step that fails or throws stops the later steps. Setup then prints a summary table
+(Plugin, Installed ref, Runtime units verified, Doctor, Next step) with the failing step name and
+code.
+
+### Requirements
+
+- macOS arm64/x64 or Linux x64 for the complete runtime; Windows is refused.
+- Linux arm64 supports platform-available subsets, **not** the default full setup: the locked
+  character `bpy==4.5.15` and interior `bpy==4.3.0` publish no matching wheels. Provisioning refuses
+  unless you explicitly omit these capabilities with `--skip character-bpy --skip interior-bpy`;
+  that is not equivalent to a complete character/interior installation.
+- Node.js ≥ 18, Git (for bootstrap) and Python ≥ 3.10
+- At least one detected agent host: Claude Code, Codex or OpenCode (see [Prerequisites](#prerequisites))
+- Network access for the first run; authorized Git access is needed for any private source you explicitly select.
+- Disk: a full provision downloads about **2.3 GB** (`img2 provision --plan` reports
+  `>= 2.29 GB` plus entries whose size the lock does not publish). Expanded size, cache and peak
+  disk are additional and platform-dependent; run `img2 provision --plan` (it writes nothing) for
+  the breakdown on your machine.
+
+### Optional Jev login
+
+Setup never logs in and never reads, stores or prints your API key. If you explicitly selected Jev
+and it has no credential, setup prints the exact opt-in login command and still succeeds:
+
+```bash
+IMG2_HOME="${IMG2_HOME:-$HOME/.img2}"
+python3 "$IMG2_HOME/plugins/jev/tools/jev.py" login
+```
+
+`IMG2_HOME` defaults to `~/.img2`. `login` needs an interactive terminal and macOS Keychain. For
+automation, provide `TYPESAFE_API_KEY` through your host's secret manager; the Jev plugin reads it
+and it takes precedence over the Keychain entry. Check status at any time (local-only: it never
+contacts TypeSafe and never prints the key):
+
+```bash
+python3 "${IMG2_HOME:-$HOME/.img2}/plugins/jev/tools/jev.py" auth-status   # 0 present, 3 missing, 1 storage error
+```
+
+A stored key may still be rejected on the first provider call. Login and setup do **not** grant
+workspace disclosure or paid-call consent. Jev has separate consent: a per-workspace grant
+(`consent authorize`) for the legacy Environment checkpoints, and a per-run grant
+(`consent authorize-decisions`) for image-aware decisions that covers image/reference/render
+disclosure to TypeSafe **and** paid calls, with an explicit run id and token budget. You approve
+those yourself; see the Jev plugin's `SKILL.md` and `DECISIONS.md`.
+
+After setup, start a new agent session (or restart the current one) so the updated skills load,
+then follow the instructions of the plugin you want to use.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Installed and verified; missing optional Jev credentials do not block success or host-model routing |
+| 1 | A step failed (including unreachable Git), or Jev auth status is unavailable/malformed |
+| 2 | Refused: invalid options, unsupported platform, protected local/dirty/foreign checkout, unmet offline preconditions or missing hash consent. Earlier completed steps are retained. |
+| 3 | Interactive input ended (EOF), or a required setup step requested input |
+
+### Re-running, repair and refusals
+
+Setup is idempotent. Re-running keeps correctly pinned managed plugins, repairs a managed checkout
+whose HEAD differs from the pin or that is missing, and still runs sync, provision and both
+doctors. A plugin registered as a local link, with local modifications, or from a foreign source is
+**refused**, not overwritten; resolve it yourself, or replace it deliberately with
+`img2 add <id> --force --yes`.
+
+### Known limitation: current pins
+
+All current core/plugin pins are marked `on-origin`: their commits are on the feature branches named
+in `plugins.lock.json`, **not yet on `main` or an accepted release**. They must be reviewed and
+merged or re-pinned before release. Setup uses the exact commits and never substitutes another ref;
+final plugin fixes and the corresponding core/harness lock closure are still pending.
+
+### Troubleshooting
+
+```bash
+img2 doctor            # static installation audit
+img2 doctor --runtime  # proves each runtime piece works; non-zero on any failure
+img2 provision --plan  # what would be downloaded; writes nothing
+```
+
+- **`upstream-wheel-tag-mismatch`:** PyPI's `bpy` cp311 macOS wheels carry an internal `cp39`
+  `WHEEL` tag, so `pip check` reports the wheel as unsupported. The harness waives *only that* case,
+  and only when the wheel's SHA-256 equals the lock pin, the filename tag matches the platform, only
+  the Python tag differs, and the `bpy` probes pass. Any other `pip check` line, package, hash or
+  tag difference stays fatal. The waiver is recorded in `provision.json`.
+- **Playwright MCP browser:** `browser-mcp-playwright` installs only pinned Chromium and its headless
+  shell. `@playwright/mcp` 0.0.78 defaults to system Chrome; launch it with `--browser chromium`
+  (plus `--headless` for headless use) and `PLAYWRIGHT_BROWSERS_PATH` pointing to this unit's `browsers`
+  directory. Its probes use that same Chrome-for-Testing channel and require a real page load and WebGL
+  render. Firefox and WebKit are opt-in server modes, not dependencies of this runtime. Firefox rev 1534
+  times out on macOS arm64 with sandbox-extension denials and a SWGL framebuffer error; provisioning
+  does not disable its sandbox or substitute a different build. `--skip browser-mcp-playwright`
+  explicitly disables the whole unit and `mcp-playwright`.
+- **Git authentication/transport:** HTTPS credential helpers, SSH commands, proxy and CA settings are
+  accepted from the caller's direct global Git config (without includes) or transport-only
+  `GIT_CONFIG_COUNT` entries; `GIT_SSH`/`GIT_SSH_COMMAND` are honored only for transport. Put approved
+  transport settings in that trusted configuration, not a plugin checkout. Checkout-controlled
+  executable config/includes are refused before fetch; hooks, filters, external diffs, `ext` protocol
+  and TLS-verification bypass remain disabled.
+- **Failed reprovision:** units, selectors, `env.sh` and the previous successful `runtime/provision.json`
+  are restored together. The failed attempt is recorded separately in `runtime/provision-failed.json`;
+  without a prior successful runtime, `provision.json` honestly reports failure.
+- **Abandoned provision lock:** empty/malformed records and dead/reused PIDs do not authorize stealing
+  the lock. Verify the original provisioner has exited, explicitly remove
+  `$IMG2_HOME/runtime/.provision.lock`, then rerun provision to recover parked units. Never remove a live owner's lock.
+
+The rest of this README is the detailed reference: the document map, the manual step-by-step
+install, explicit add/update/remove, discovery and layout.
 
 ## Documentation, and which one to read
 
@@ -22,7 +291,10 @@ unless you want the whole thing in one file.
 Ecosystem discovery: `img2 plugins` reads the [official catalog](catalog.json). GitHub topic
 `img2threejs-plugin` can also surface community repositories outside that catalog.
 
-## Quickstart
+## Manual step-by-step install (reference)
+
+`img2 setup` above does all of this for you. Use the manual steps when you want to control each
+phase, or install a single plugin by hand.
 
 ### 1. Install the harness
 
@@ -55,7 +327,7 @@ If `img2` is not found, or its version is older than 0.4.0, use the latest CLI d
 
 ```bash
 npx --yes @img2threejs/img2@latest plugins
-npx --yes @img2threejs/img2@latest add hello-cube --yes
+npx --yes @img2threejs/img2@latest add cs2 --yes
 ```
 
 For short commands that always use the latest published CLI, set this **bash/zsh alias**:
@@ -86,15 +358,15 @@ anything and can run before harness setup. `list` reads your local registry.
 |---|---|---|---|
 | [character](https://github.com/img2threejs/plugin-character) | Character rigging, skin conditioning, animation and rig gates | Public | `img2 add character --yes` |
 | [cs2](https://github.com/img2threejs/plugin-cs2) | Counter-Strike 2 weapon/glove skin reconstruction and review gates | Public | `img2 add cs2 --yes` |
-| [environment](https://github.com/img2threejs/plugin-environment) | The environment plugin, distributed from a private repository | **Private — authorized Git access required** | `img2 add environment --yes` |
-| [hello-cube](https://github.com/img2threejs/plugin-hello-cube) | A small deterministic image-to-Three.js cube example | Public | `img2 add hello-cube --yes` |
-| [img2glb](https://github.com/img2threejs/plugin-img2glb) | Image-to-GLB mesh generation through the hosted TRELLIS space | Public | `img2 add img2glb --yes` |
+| [interior](https://github.com/img2threejs/plugin-interior) | Image/reference to an interior scene: Blender authoring, PBR, render/repair and verified delivery | Public | `img2 add interior --yes` |
+| jev | Bounded image-aware decision advisories and repair advice; never acceptance authority | **Private — authorized Git access required** | `img2 add jev --yes` |
+| [pixi2d](https://github.com/img2threejs/plugin-pixi2d) | Explicit 2D image reconstruction in PixiJS with editable nodes and a blocking review gate | Public | `img2 add pixi2d --yes` |
 
 The table lists announced plugins; use `img2 plugins` for the current catalog. You do not
 need to install all of them. For a small first installation:
 
 ```bash
-img2 add hello-cube --yes
+img2 add cs2 --yes
 img2 list
 img2 doctor
 img2 sync --check
@@ -106,6 +378,26 @@ does **not** run a reconstruction. `doctor` is a static installation audit, not 
 quality or reconstruction acceptance check. `sync --check` verifies that generated files
 match the registered manifests.
 
+#### Runtime dependencies
+
+`img2 provision` installs and verifies everything the plugins run on (Blender `bpy` in two separate
+environments, Playwright + Chromium, Three, NumPy/Pillow, Source2Viewer-CLI + .NET, the vision stack and the
+MCP servers) from `dependencies.lock.json` into `$IMG2_HOME/runtime/`:
+
+```bash
+img2 provision --plan            # sizes per environment; writes nothing
+img2 provision                   # default:true plugins only (four domains, no Jev); one confirmation, --yes skips it
+img2 provision --minimal         # provision profile: no vision, MCP servers or extra browsers (not `setup --minimal`)
+img2 provision --plugins character,jev --skip cs2-dotnet-runtime
+img2 doctor --runtime            # proves each piece works; non-zero exit on any failure
+img2 provision --remove          # removes only what provisioning created
+```
+
+Artifacts are verified against the lock before use (SHA-256, or SHA-512 SRI for npm and .NET); entries
+the lock pins only by MD5/CRC32C/git SHA-1 (Playwright browser bundles, some model files) are refused
+unless `--allow-weak-hash`, which records a locally computed SHA-256 in `provision.json`. Exit codes: 0 ok,
+1 failed step or red doctor, 2 refused before running, 3 declined. Windows is refused.
+
 ### 4. Use the installed plugin in your agent
 
 Start a new agent session, or restart the current one, so updated skills are loaded.
@@ -113,8 +405,8 @@ Open the plugin's linked README above for its inputs, setup and workflow; follow
 `SKILL.md` and tool instructions for the actual task. For example, ask your agent:
 
 ```text
-Use the hello-cube skill with ./reference.png. Follow the plugin's instructions,
-produce the Three.js output, and report the output files and checks performed.
+Use the cs2 skill with ./reference.png. Follow the plugin's instructions,
+produce the reconstruction output, and report the output files and checks performed.
 ```
 
 The harness manages installation and capability lookup. It does not generate a model just
@@ -123,10 +415,10 @@ because a plugin was added, and it does not replace each plugin's usage instruct
 ### 5. Check for updates, update or remove a plugin
 
 ```bash
-img2 update hello-cube --check   # check this plugin without replacing it
-img2 update hello-cube           # install a newer available version
+img2 update cs2 --check   # check this plugin without replacing it
+img2 update cs2           # install a newer available version
 img2 doctor                     # audit again after changes
-img2 remove hello-cube          # unlink owned host links and back up the managed checkout
+img2 remove cs2          # unlink owned host links and back up the managed checkout
 ```
 
 Omit the ID from `img2 update` to inspect/update the harness checkout and all registered
@@ -145,7 +437,10 @@ or replaces one, and accepts no options. Without the marker, or with `IMG2_AUTO_
 choice; it is not a security boundary. Agent skills are instructed never to write it, but an
 agent that can write files under `$IMG2_HOME` could create it, which is why `ensure` is limited
 to public official catalog plugins.
-Git updates follow the newest reachable semver tag. Local `--link` checkouts are live and
+Git updates follow the newest reachable semver tag, but a full-SHA pin is never compared to tag text:
+an ancestor tag leaves the pin intact, only a proven descendant release may advance it, and an
+unrelated history is refused. Use a reviewed updated setup lock or explicit `add --ref` for a
+deliberate pin change. Local `--link` checkouts are live and
 are not fetched by `update`. Removal drops the registry row and its user-authored overrides;
 it does not delete the original source checkout of a local link.
 
@@ -158,7 +453,6 @@ The standalone installers are public packages in the
 |---|---|---|
 | character | [@img2threejs/character](https://www.npmjs.com/package/@img2threejs/character) | `npx --yes @img2threejs/character install --yes` |
 | cs2 | [@img2threejs/cs2](https://www.npmjs.com/package/@img2threejs/cs2) | `npx --yes @img2threejs/cs2 install --yes` |
-| environment | [@img2threejs/environment](https://www.npmjs.com/package/@img2threejs/environment) | `npx --yes @img2threejs/environment install --yes` |
 
 Run the same command with `--dry-run` instead of `--yes` to preview without writes.
 Use `doctor` to audit the installation, `update --check` to check plugin releases, and
@@ -167,34 +461,8 @@ plugin source is fetched separately at the package's immutable commit pin. They 
 `@img2threejs/img2@0.4.0` and do not run a reconstruction.
 
 The npm package name and executable differ: a global installation of
-`@img2threejs/cs2` provides `img2-cs2`, and likewise for character/environment.
+`@img2threejs/cs2` provides `img2-cs2`, and likewise for character.
 `img2 add <id>` still resolves the plugin's Git source, not its npm installer.
-
-### Private environment plugin
-
-The [environment source](https://github.com/img2threejs/plugin-environment) requires a
-GitHub account with repository access and working Git credentials. A private GitHub link
-may appear as 404 when you are signed out or lack permission. The public
-[`@img2threejs/environment` npm installer](https://www.npmjs.com/package/@img2threejs/environment) does
-**not** grant access to that source.
-
-With the harness installed and Git access configured:
-
-```bash
-img2 add environment --yes
-img2 doctor
-```
-
-Alternatively, the standalone installer can preview an installation without changes and
-bootstrap the harness when installing:
-
-```bash
-npx --yes @img2threejs/environment install --dry-run
-npx --yes @img2threejs/environment install --yes
-```
-
-The organization installer pins SDK `0.4.0` and plugin source commit `c19f5f2`.
-Newer local environment development is not included in this installer.
 
 ### Refs, replacement and common refusals
 
@@ -213,13 +481,13 @@ Newer local environment development is not included in this installer.
 For a ref-pinned install, use a real ref from that plugin's repository:
 
 ```bash
-img2 add hello-cube --ref main --yes
+img2 add cs2 --ref main --yes
 ```
 
 Only when you deliberately want to replace an existing registration:
 
 ```bash
-img2 add environment --force --yes
+img2 add cs2 --force --yes
 ```
 
 `--force` backs up the previous managed checkout or mount before replacement. If the

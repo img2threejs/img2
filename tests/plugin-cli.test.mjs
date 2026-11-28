@@ -7,8 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const BIN = path.join(ROOT, 'bin', 'img2.mjs')
-const HELPER = new URL('../bin/plugin-cli.mjs', import.meta.url).href
+import { makeCoreSource, copyCli, coreInsteadOf } from './core-fixture.mjs'
 
 function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim()
@@ -24,6 +23,12 @@ function fixture(t, { sourceId = 'demo', ref = 'v0.1.0' } = {}) {
   const localBin = path.join(home, '.local', 'bin')
   fs.mkdirSync(localBin, { recursive: true })
   fs.mkdirSync(path.join(home, '.claude'))
+  // The harness install also checks out the pinned core: a CLI copy pinned to a local core repo keeps this offline.
+  const base = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+  const coreSource = makeCoreSource(root, base)
+  const cli = copyCli(root, coreSource.shas[0])
+  const BIN = path.join(cli, 'bin', 'img2.mjs')
+  const HELPER = new URL('file://' + path.join(cli, 'bin', 'plugin-cli.mjs')).href
   const harness = path.join(root, 'harness-source')
   fs.mkdirSync(path.join(harness, 'bin'), { recursive: true })
   fs.cpSync(path.join(ROOT, 'bin'), path.join(harness, 'bin'), { recursive: true })
@@ -44,7 +49,7 @@ function fixture(t, { sourceId = 'demo', ref = 'v0.1.0' } = {}) {
   fs.writeFileSync(pkg, JSON.stringify({ name: 'img2-demo', version: '0.1.0', img2Plugin: { id: 'demo', source: 'img2threejs/demo', ...(ref ? { ref } : {}) } }))
   const entry = path.join(root, 'wrapper.mjs')
   fs.writeFileSync(entry, `import { runPluginCli } from ${JSON.stringify(HELPER)}; process.exitCode = await runPluginCli({ packageUrl: new URL('./package.json', import.meta.url) });\n`)
-  const env = { ...process.env, HOME: home, IMG2_HOME: path.join(home, '.img2'), PATH: localBin + path.delimiter + process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'url.' + harness + '.insteadOf', GIT_CONFIG_VALUE_0: 'https://github.com/img2threejs/img2', GIT_CONFIG_KEY_1: 'url.' + plugin + '.insteadOf', GIT_CONFIG_VALUE_1: 'https://github.com/img2threejs/demo.git', GIT_CONFIG_KEY_2: 'protocol.file.allow', GIT_CONFIG_VALUE_2: 'always' }
+  const env = { ...process.env, HOME: home, IMG2_HOME: path.join(home, '.img2'), PATH: localBin + path.delimiter + process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '4', ...coreInsteadOf(coreSource.source, 3), GIT_CONFIG_KEY_0: 'url.' + harness + '.insteadOf', GIT_CONFIG_VALUE_0: 'https://github.com/img2threejs/img2', GIT_CONFIG_KEY_1: 'url.' + plugin + '.insteadOf', GIT_CONFIG_VALUE_1: 'https://github.com/img2threejs/demo.git', GIT_CONFIG_KEY_2: 'protocol.file.allow', GIT_CONFIG_VALUE_2: 'always' }
   const run = args => spawnSync(process.execPath, [entry, ...args], { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   const harnessRun = args => spawnSync(process.execPath, [BIN, ...args], { cwd: root, env, encoding: 'utf8' })
   return { root, home, plugin, manifest, env, run, harnessRun, H: env.IMG2_HOME }

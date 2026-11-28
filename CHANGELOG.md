@@ -11,6 +11,122 @@ change that breaks a conforming plugin bumps one of those and states the migrati
 
 ## [Unreleased]
 
+### Fixed
+
+- Default/Enter/`--yes`/non-TTY setup now selects `character,cs2,interior,pixi2d`; Jev is opt-in.
+  Setup `--minimal` selects that same bundle with the full runtime profile, not a core-only install.
+  Bare provisioning respects plugin `default` flags; runtime doctor uses the recorded selection.
+  Explicitly selected Jev without credentials prints an opt-in login hint while setup succeeds and
+  advertises normal host-model routing. Provisioning, integrity and auth-storage errors still fail.
+  `route` forwards core `--decider model|jev`, `--model-id`, `--model-answers` and `--token-budget`
+  unchanged; host answers and routing decisions remain entirely in core, never in JavaScript.
+- Synchronize fetchable candidate pins for optional-Jev Core, clean synthetic Character,
+  the frozen-policy CS2 fixture, Interior's harness 0.6.0 contract, Jev 0.5.0 and
+  Pixi2D's explicit Apache-2.0 source license. Routing snapshots use the same producer
+  commits as their installation pins; candidate integration is not a main-branch release.
+- Report a missing Blender CLI without falsely declaring bpy-only Interior routes blocked;
+  their verified interpreter dependency is checked independently by Core.
+- Opted-in 3D requests can install a missing public producer from a versioned, commit/hash-bound
+  routing snapshot and continue the same request without a plugin name or separate install command.
+  Selection uses typed roles/observations, never object labels. Downloads verify exact Git pins and
+  route-card equality; concurrent requests serialize, and failed publication rolls back installation
+  metadata and links. Core execution authority, consent and terminal gates are unchanged.
+- Refresh the Interior candidate pin and bind its actual route card; this is branch integration,
+  not release or independent-review acceptance. Legacy locks remain readable but do not gain
+  automatic routing metadata implicitly.
+
+- Prepare harness **0.6.0**: setup probes the installed CLI's route interface and refuses obsolete
+  installs before provisioning instead of reporting source-CLI behavior as installed capability.
+- Git transport preserves approved SSH, credential-helper, proxy and CA settings without trusting
+  checkout includes or executable config. Cleanliness hashes literal index/worktree bytes and
+  never runs filters, including worktree-config filters; SHA-pinned plugins cannot be downgraded
+  to ancestor tags or replaced by unrelated histories.
+- Failed runtime publication restores the prior successful receipt, selectors and units; failed
+  attempts have a separate record. Installer/probe environments use the shared allowlist, excluding
+  ambient credentials and interpreter/package-manager injection even through overrides.
+- Provision locks publish complete owner records atomically and release only the matching token/inode;
+  abandoned locks require explicit recovery rather than automatic PID-based stealing.
+- Pack `catalog.json` and require valid catalog/pin validation; document public sources, feature-branch
+  pins and explicit Linux arm64 bpy refusals without changing any upstream pins.
+
+- The core router's harness pin check (`HarnessPin._imports`) accepts the launcher again: `bin/locks.mjs`
+  moved to `bin/runtime/locks.mjs` (only `./` imports are provable) and every probe program that used
+  `require(`/`import(` moved out of `bin/` into data files under `runtime-probes/` that
+  `bin/runtime/probe-source.mjs` reads and hands to the provisioned Node. `tests/launcher-closure.test.mjs`
+  guards the rule.
+- `setup` no longer exits 2 on a clean home: hash-weak artifacts are accepted by default with a one-line
+  notice and a locally computed SHA-256 in the receipt; `--strict-hash` refuses them.
+- Plugin tools (Jev `auth-status`, the printed login command) run with the provisioned Python 3.11, not the
+  ambient `python3`; setup refuses in preflight when it needs a Python >= 3.10 and has none.
+
+### Added
+
+- `img2 route <route.py args>` and `img2 core-run <script> <args>`: the one supported way to run the core from
+  an install (`bin/route.mjs`). Canonical `IMG2_HOME`, a minimal environment, the managed Python (and the
+  user's `blender`) first on `PATH`, a copied route interpreter that sees only the verified Pillow env, and
+  the harness pins from `provision.json`. Fixes acceptance round-2 N1 (no Pillow under the managed Python),
+  N2 (probes need the managed Python first on `PATH`) and N3 (non-canonical `IMG2_HOME`). Setup prints the
+  `img2 route` command; a Jev login hint is printed only when Jev was explicitly selected.
+- The core skill is pinned in `plugins.lock.json` (`core`, validated by `validateCorePin`), checked out by
+  `img2 install` (skip with `--no-core`) and `img2 setup` at `$IMG2_HOME/core`, linked into hosts as
+  `img2threejs`, and verified by `img2 doctor`. `img2 core-path [--json]` prints where `forge/route.py` is.
+- `setup` writes `$IMG2_HOME/provision.json` for the core's `scripts/e2e/route_one.py`.
+
+- `img2 setup`: choose among five plugins (Enter defaults to the four domain plugins without Jev),
+  or use `--yes`, `--plugins` or `--minimal` (the same no-Jev bundle). Installs missing harness/source
+  pins from `plugins.lock.json`, repairs managed links, syncs, provisions the full selected runtime and
+  runs both doctors. Supports weak-hash consent, dependency skips and offline repair; stops on real failures.
+  Explicitly selected Jev's own `auth-status` determines whether to print an optional TTY login hint;
+  a missing credential does not fail setup. Setup never accepts credentials or grants disclosure/paid-call consent.
+- `dependencies.lock.json` (schema 1): pinned install manifest for everything `img2threejs` needs (separate
+  character bpy 4.5.15 and interior bpy 4.3.0 environments, NumPy/Pillow, Three 0.186.1 and the interior
+  viewer's 0.180.0, Playwright 1.64.0 + Chromium, Node >=22, pixi.js, Vite, gltf-validator, esbuild,
+  Source2Viewer-CLI + .NET, the vision stack and models, MCP servers) with `full` and `minimal` profiles.
+  Entries are `resolved` or `unresolved` with a reason; unresolved ones (mostly artifacts whose registry
+  publishes no SHA-256) must be resolved before a release.
+- `plugins.lock.json` (schema 1): pinned commit, capability name, visibility and default-on selection for
+  each approved plugin. `bin/runtime/locks.mjs` validates both files.
+- `img2 provision`: reads the locks and installs every runtime dependency under
+  `$IMG2_HOME/runtime/<lock digest>/<environment>/`, one atomic unit per environment (separate bpy 4.5.15 and
+  4.3.0 venvs, hash-pinned pip wheels, npm roots from SRI-verified tarballs, Chromium through the pinned
+  Playwright CLI, Source2Viewer-CLI, .NET, vision, MCP servers). `--plan` prints sizes and writes nothing;
+  one confirmation (`--yes` skips it; a non-TTY without `--yes` exits 2); `--profile minimal`, `--plugins`,
+  `--skip <id>`, `--offline`, `--allow-weak-hash`, `--remove`. Writes `selectors.json` (0600, atomic),
+  `env.sh` and a `provision.json` receipt.
+- `img2 doctor --runtime [--json]`: bounded probes that prove bpy imports in both environments, NumPy/Pillow
+  work, Node imports Three, headless Chromium renders WebGL, gltf-validator accepts a GLB, Source2Viewer-CLI
+  runs, the vision stack infers and each MCP server answers `initialize`; skipped, Jev-login and CS2-VPK
+  conditions are reported apart from failures.
+
+### Fixed
+
+- Playwright MCP provisions only its pinned Chromium runtime, not opt-in Firefox/WebKit. Firefox rev
+  1534 cannot complete headless launch on the tested macOS arm64 host (sandbox-extension/SWGL errors).
+  MCP probes explicitly select `--browser chromium`; browser probes require a real page load as well
+  as the existing red WebGL render, using MCP's Chrome-for-Testing channel.
+- Provisioning retains previous units until the complete run succeeds and restores them after later
+  failures. Interrupted runs restore parked previous units before resuming.
+- `pip check` stays fatal except one audited waiver: `bpy <version> is not supported on this platform` for a
+  wheel whose sha256 equals the lock pin, whose filename tag matches the platform and whose internal `WHEEL`
+  tag differs only in the python tag (PyPI's bpy cp311 macOS wheels carry `Tag: cp39-...`). Any other line,
+  package, hash or tag difference fails. The waiver (`upstream-wheel-tag-mismatch`, package, version, wheel
+  sha256) is recorded in `provision.json`; the bpy probes now also create and evaluate a cube headlessly.
+- The Vite probe uses the real path of its scratch directory (macOS `/tmp` is a symlink and Rollup rejected it).
+- Vision probes check actual pinned distributions in closure-only lock entries rather than treating
+  the entry's descriptive name as an installed package.
+- Refuse hardlink sources with symlinked ancestors and revalidate sources after extraction; recheck
+  cache hits against current size and Git blob pins; reject stale plugin-lock selector digests.
+- Timeout handling kills subprocess groups and bounds pipe waits. MCP probes require a successful
+  `tools/list` response, not just successful initialization.
+
+### Changed
+
+- Official catalog now lists exactly the approved plugins: `character`, `cs2`, `interior`, `jev` and
+  `pixi2d`. `environment`, `hello-cube` and `img2glb` are removed, so `img2 add`/`img2 ensure` of those
+  IDs now exit 2 (unknown official plugin); explicit `org/repo`, URL, npm and `--link` sources still work.
+  `pixi2d` becomes installable once img2threejs/plugin-pixi2d#1 is merged (its main branch carries no
+  `plugin.json` before that).
+
 ## [0.5.0] — 2026-11-05
 
 ### Added

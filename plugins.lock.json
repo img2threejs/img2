@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-11-28",
+  "defaultInstall": "all",
+  "core": {
+    "id": "core",
+    "repo": "https://github.com/img2threejs/img2threejs",
+    "commit": "a720936dbdc158db0ac8f69fa0e721a9ab1c54eb",
+    "branch": "feat/textured-routing-install",
+    "pinState": "on-origin",
+    "note": "candidate is published on origin/feat/textured-routing-install; default host-model routing does not require Jev. Not on origin/main and not release acceptance."
+  },
+  "plugins": [
+    {
+      "id": "character",
+      "capability": "rigged character",
+      "repo": "https://github.com/img2threejs/plugin-character",
+      "commit": "4db41949bab7ef42f24a1829bc4e8b5fa0401f69",
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "on-origin",
+      "note": "candidate is published on origin/feat/routed-workflow with independently authored synthetic inputs; native quality acceptance remains separate."
+    },
+    {
+      "id": "cs2",
+      "capability": "CS2 skin",
+      "repo": "https://github.com/img2threejs/plugin-cs2",
+      "commit": "edec2d3afcf9b4d63376ef63938d5727ea1baa20",
+      "routing": {
+        "schema": 1,
+        "commit": "edec2d3afcf9b4d63376ef63938d5727ea1baa20",
+        "routeCardSha256": "19adb783e9de31448f887eb2a7000d2d38bf14c986c9396f5217c38c0a2af82c",
+        "card": {
+          "kind": "img2.route-card",
+          "version": 1,
+          "outputKind": "spec-augmentation",
+          "requires": {},
+          "notFor": {},
+          "costClass": "local",
+          "deps": [{"probe": "python3>=3.10"}],
+          "display": {
+            "appliesTo": "CS2 weapon and glove skins requiring evidence-backed finish, wear and identity detail. Selection requests the CS2 profile only; independent authoritative classification can veto it. The augmentation is consumed by a base child that produces a 3D object.",
+            "notFor": "Look-alikes or items without authoritative CS2 classification. Routing probability, names and heuristic detection do not establish identity. No game assets are supplied; exact textures require separately acquired, legally usable evidence."
+          }
+        }
+      },
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
+    },
+    {
+      "id": "interior",
+      "capability": "interior scene",
+      "repo": "https://github.com/img2threejs/plugin-interior",
+      "commit": "5673d2bf578d43d57bf130bcf3f6d7f34b88f009",
+      "routing": {
+        "schema": 1,
+        "commit": "5673d2bf578d43d57bf130bcf3f6d7f34b88f009",
+        "routeCardSha256": "a488301a65e404684c002e659ac0ae976b39a64671311177be629bc075fcde2f",
+        "card": {
+          "kind": "img2.route-card",
+          "version": 1,
+          "outputKind": "3d-scene",
+          "requires": {
+            "roles": ["scene-container"],
+            "observations": {"enclosure": ["enclosed-room"], "roomCount": [1]}
+          },
+          "notFor": {"observations": {"roomCount": [">1"]}},
+          "costClass": "heavy",
+          "deps": [{"probe": "interior-bpy>=4.3"}],
+          "display": {
+            "appliesTo": "One enclosed room authored as metric Blender geometry with PBR, bake/probe, runtime GLB and an independently measured composition handoff. Separately routed exact component identities are removed before native authoring is saved or baked.",
+            "notFor": "Multiple rooms, open environments, standalone objects, rigging, explicit 2D, or unknown room count. This 0.3.2 adapter does not include the unreleased 0.4 house/schema-3 pipeline. Artifact production is not visual or gate acceptance."
+          }
+        }
+      },
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "on-origin",
+      "note": "candidate is published on origin/feat/jev-four-decisions with the harness 0.6.0 install contract; full native routing and quality acceptance remain separate."
+    },
+    {
+      "id": "jev",
+      "capability": "Jev decisions",
+      "repo": "https://github.com/img2threejs/plugin-jev",
+      "commit": "4961464246734dbfbc0e4b8b60adbe9a9b8192e9",
+      "visibility": "public",
+      "selectable": true,
+      "default": false,
+      "pinState": "on-origin",
+      "note": "commit is on origin (origin/feat/jev-four-decisions), not on origin/main; merge or re-pin before a release"
+    },
+    {
+      "id": "pixi2d",
+      "capability": "2D scene",
+      "repo": "https://github.com/img2threejs/plugin-pixi2d",
+      "commit": "8a361b335f78bf6da69b3d3f5b1898c045123d7b",
+      "visibility": "public",
+      "selectable": true,
+      "default": true,
+      "pinState": "on-origin",
+      "note": "candidate is published on origin/chore/apache-license with explicit source-code licensing; third-party artwork rights remain separate."
+    }
+  ]
+}
