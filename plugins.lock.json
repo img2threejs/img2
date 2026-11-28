@@ -15,7 +15,7 @@
       "id": "character",
       "capability": "rigged character",
       "repo": "https://github.com/img2threejs/plugin-character",
-      "commit": "2e55a5f3fbaf0c769103fa412ca1f75615b478cb",
+      "commit": "4db41949bab7ef42f24a1829bc4e8b5fa0401f69",
       "visibility": "public",
       "selectable": true,
       "default": true,
