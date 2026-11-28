@@ -327,6 +327,7 @@ test('img2 route reports a missing blender on stderr and keeps stdout for the ro
   const r = cli(fx, ['route', '--run-id', 'r1'], { IMG2_HOME: fx.H })
   assert.equal(r.status, 0, r.stderr)
   assert.match(r.stderr, /blender not on PATH/)
+  assert.doesNotMatch(r.stderr, /interior routes will be blocked|dependency-missing:blender>=4\.3/)
   assert.ok(r.stdout.startsWith('ARGV:'))
 })
 

@@ -24,6 +24,8 @@ change that breaks a conforming plugin bumps one of those and states the migrati
   the frozen-policy CS2 fixture, Interior's harness 0.6.0 contract, Jev 0.5.0 and
   Pixi2D's explicit Apache-2.0 source license. Routing snapshots use the same producer
   commits as their installation pins; candidate integration is not a main-branch release.
+- Report a missing Blender CLI without falsely declaring bpy-only Interior routes blocked;
+  their verified interpreter dependency is checked independently by Core.
 - Opted-in 3D requests can install a missing public producer from a versioned, commit/hash-bound
   routing snapshot and continue the same request without a plugin name or separate install command.
   Selection uses typed roles/observations, never object labels. Downloads verify exact Git pins and

@@ -266,7 +266,7 @@ export function prepareCoreRun({ kind, args, home, host = process.env, probe }) 
 
 // One stderr line (stdout stays the router's JSON); paths and versions only.
 export const describeRun = (p) => 'img2: IMG2_HOME=' + p.home + ' python=' + p.file + ' (Pillow ' + p.interpreter.pillowVersion + ' from the ' + p.interpreter.unit + ' env), '
-  + (p.blender ? 'blender=' + p.blender : 'blender not on PATH: interior routes will be blocked (dependency-missing:blender>=4.3)')
+  + (p.blender ? 'blender=' + p.blender : 'blender not on PATH; Blender-CLI workflows unavailable (bpy-only routes are checked independently)')
 
 export function runCore(prepared, { start = spawn } = {}) {
   return new Promise((resolve) => {
